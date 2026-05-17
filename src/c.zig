@@ -2,8 +2,11 @@
 pub const c = @cImport({
     @cDefine("SDL_DISABLE_OLD_NAMES", {});
     @cDefine("SDL_MAIN_HANDLED", {});
+
+    @cInclude("vulkan/vulkan.h");
+
     @cInclude("SDL3/SDL.h");
     @cInclude("SDL3/SDL_revision.h");
     @cInclude("SDL3/SDL_main.h");
+    @cInclude("SDL3/SDL_vulkan.h");
 });
-

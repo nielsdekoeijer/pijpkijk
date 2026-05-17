@@ -1,18 +1,37 @@
+const c = @import("c.zig").c;
+
 /// Return type helper
 fn ValidReturnType(comptime ErrorType: type) type {
-    switch (@typeInfo(ErrorType)) {
-        inline .bool => return void,
-        inline .optional => return ErrorType,
-        inline else => return ErrorType,
+    const info = @typeInfo(ErrorType);
+    switch (ErrorType) {
+        c.VkResult => return void,
+        inline else => switch (info) {
+            inline .bool => return void,
+            inline .optional => return info.optional.child,
+            inline else => return ErrorType,
+        },
     }
 }
 
-/// SDL error Helper
-pub fn handleSDLError(err: anytype) !ValidReturnType(@TypeOf(err)) {
+/// SDL error Helper. Maps booleans, nullptrs, etc. to Zig error types
+pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
     switch (@TypeOf(err)) {
-        inline bool => if (err == false) return error.SDLError,
+        inline bool => if (err == false) return error.CError,
+        inline c.VkResult => {
+            if (err >= c.VK_SUCCESS) {
+                return;
+            } else {
+                return error.CError;
+            }
+        },
         inline else => switch (@typeInfo(@TypeOf(err))) {
-            inline .optional => return (err orelse return error.SDLError),
+            inline .optional => {
+                if (err) |unwrapped| {
+                    return unwrapped;
+                } else {
+                    return error.CError;
+                }
+            },
             inline else => unreachable,
         },
     }

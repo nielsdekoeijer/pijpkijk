@@ -1,6 +1,10 @@
 const std = @import("std");
 const Io = std.Io;
 
+pub const std_options = std.Options{
+    .log_level = .debug,
+};
+
 const pijpkijk = @import("pijpkijk");
 
 pub fn main(init: std.process.Init) !void {
@@ -12,9 +16,8 @@ pub fn main(init: std.process.Init) !void {
 
     _ = args;
     _ = io;
-    _ = allocator;
 
-    var app = try pijpkijk.App.init();
+    var app = try pijpkijk.App.init(allocator);
     defer app.deinit();
     try app.run();
 }
