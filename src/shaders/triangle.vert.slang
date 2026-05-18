@@ -1,5 +1,5 @@
-[[vk::binding(0, 2)]]
-cbuffer UniformBlock {
+[[vk::binding(0, 0)]]
+cbuffer ViewUniforms {
     float2 screen_size;
 }
 
@@ -17,12 +17,8 @@ struct VertexOutput {
 VertexOutput main(VertexInput input) {
     VertexOutput output;
     
-    // Map screen coordinates (pixels) to NDC (-1.0 to 1.0)
     float2 ndc = (input.position / screen_size) * 2.0 - 1.0;
     
-    // Flip Y
-    ndc.y = -ndc.y; 
-
     output.position = float4(ndc, 0.0, 1.0);
     output.color = input.color;
     

@@ -1,5 +1,7 @@
 const c = @import("c.zig").c;
 const std = @import("std");
+const Vertex = @import("types.zig").Vertex;
+const Uniform = @import("types.zig").Uniform;
 const handleError = @import("error.zig").handleError;
 
 // =SDL3Initialization=================================================================================================
@@ -20,7 +22,7 @@ pub fn sdlInit(options: struct {
 pub fn sdlQuit() void {
     c.SDL_Quit();
 
-    defer std.log.info("SDL3 quit OK", .{});
+    defer std.log.info("Deinit SDL3 OK", .{});
 }
 
 // =SDL3Window=========================================================================================================
@@ -49,7 +51,7 @@ pub fn sdlInitWindow(options: *const struct {
 pub fn sdlDestroyWindow(window: *c.SDL_Window) void {
     c.SDL_DestroyWindow(window);
 
-    defer std.log.info("SDL3 destroy window OK", .{});
+    defer std.log.info("Deinit SDL3 window OK", .{});
 }
 
 // =ValidationLayers===================================================================================================
@@ -319,6 +321,9 @@ pub fn getVkExtent(
     window: *c.SDL_Window,
     capabilities: c.VkSurfaceCapabilitiesKHR,
 ) !c.VkExtent2D {
+    std.log.debug("Trying to get extent...", .{});
+    errdefer std.log.err("Trying to get extent failed", .{});
+
     if (capabilities.currentExtent.width != std.math.maxInt(u32) or //
         capabilities.currentExtent.height != std.math.maxInt(u32))
     {
@@ -333,6 +338,7 @@ pub fn getVkExtent(
     const h32: u32 = @intCast(if (h < 0) 0 else h);
 
     // clamp to boundaries defined by the swapchain
+    defer std.log.debug("Trying to get extent OK", .{});
     return .{
         .width = std.math.clamp(
             w32,
@@ -345,6 +351,97 @@ pub fn getVkExtent(
             capabilities.maxImageExtent.height,
         ),
     };
+}
+
+fn selectSupportedVkFormats(
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    vkFormats: []c.VkFormat,
+    vkImageTiling: c.VkImageTiling,
+    vkFormatFeatureFlags: c.VkFormatFeatureFlags,
+) !c.VkFormat {
+    for (vkFormats) |vkFormat| {
+        var vkFormatProperties: c.VkFormatProperties = undefined;
+        c.vkGetPhysicalDeviceFormatProperties(vkPhysicalDevice, vkFormat, &vkFormatProperties);
+
+        if (vkImageTiling == c.VK_IMAGE_TILING_LINEAR and //
+            (vkFormatProperties.linearTilingFeatures & vkFormatFeatureFlags) == vkFormatFeatureFlags)
+        {
+            return vkFormat;
+        }
+
+        if (vkImageTiling == c.VK_IMAGE_TILING_OPTIMAL and //
+            (vkFormatProperties.optimalTilingFeatures & vkFormatFeatureFlags) == vkFormatFeatureFlags)
+        {
+            return vkFormat;
+        }
+    }
+
+    return error.VkErrorFormatUnsupported;
+}
+
+pub fn getPreferredVkDepthFormat(
+    vkPhysicalDevice: c.VkPhysicalDevice,
+) !c.VkFormat {
+    return try selectSupportedVkFormats(
+        vkPhysicalDevice,
+        @ptrCast(@constCast(&[_]c.VkFormat{
+            c.VK_FORMAT_D32_SFLOAT,
+            c.VK_FORMAT_D32_SFLOAT_S8_UINT,
+            c.VK_FORMAT_D24_UNORM_S8_UINT,
+        })),
+        c.VK_IMAGE_TILING_OPTIMAL,
+        c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    );
+}
+
+pub fn getPreferredVkSurfaceFormat(
+    allocator: std.mem.Allocator,
+    vk_physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkSurfaceFormatKHR {
+    var vk_surface_format: c.VkSurfaceFormatKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
+        allocator,
+        vk_physical_device,
+        surface,
+    );
+
+    defer allocator.free(supportedSurfaceFormats);
+
+    vk_surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return vk_surface_format;
+}
+
+pub fn getPreferredVkPresentMode(
+    allocator: std.mem.Allocator,
+    vk_physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkPresentModeKHR {
+    var vk_present_mode: c.VkPresentModeKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supportedPresentModes = try getSupportedVkDeviceSurfacePresentModes(
+        allocator,
+        vk_physical_device,
+        surface,
+    );
+
+    defer allocator.free(supportedPresentModes);
+
+    vk_present_mode = selectPreferredSurfacePresentMode(supportedPresentModes);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return vk_present_mode;
 }
 
 pub fn getPhysicalDeviceSurfaceCapabilities(
@@ -901,11 +998,9 @@ pub fn initVkDevice(
 }
 
 pub fn deinitVkDevice(vk_device: c.VkDevice) void {
-    std.log.info("Trying to free vulkan device...", .{});
-
     c.vkDestroyDevice(vk_device, null);
 
-    defer std.log.info("Trying to free vulkan device OK", .{});
+    defer std.log.info("Deinit vulkan device OK", .{});
 }
 
 // =VkSwapchain========================================================================================================
@@ -925,7 +1020,7 @@ pub fn initVkSwapchain(
     std.log.info("Trying to init vulkan swapchain...", .{});
     errdefer std.log.err("Trying to init vulkan swapchain failed", .{});
 
-    const imageSharingMode = blk: {
+    const imageSharingMode: u32 = blk: {
         if (graphicsQueueIndex != presentQueueIndex) {
             break :blk c.VK_SHARING_MODE_CONCURRENT;
         } else {
@@ -933,7 +1028,7 @@ pub fn initVkSwapchain(
         }
     };
 
-    const queueFamilyIndexCount = blk: {
+    const queueFamilyIndexCount: u32 = blk: {
         if (graphicsQueueIndex != presentQueueIndex) {
             break :blk 2;
         } else {
@@ -961,8 +1056,8 @@ pub fn initVkSwapchain(
         .imageExtent = selectedSwapExtent,
         .imageArrayLayers = 1,
         .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .imageSharingMode = imageSharingMode,
-        .queueFamilyIndexCount = queueFamilyIndexCount,
+        .imageSharingMode = @intCast(imageSharingMode),
+        .queueFamilyIndexCount = @intCast(queueFamilyIndexCount),
         .pQueueFamilyIndices = pQueueFamilyIndices,
         .preTransform = vkSurfaceCapabilities.currentTransform,
         .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
@@ -972,6 +1067,7 @@ pub fn initVkSwapchain(
     }, null, &vk_swapchain));
 
     defer std.log.info("Trying to init vulkan swapchain OK", .{});
+    return vk_swapchain;
 }
 
 pub fn deinitVkSwapchain(
@@ -980,4 +1076,841 @@ pub fn deinitVkSwapchain(
 ) void {
     c.vkDestroySwapchainKHR(vkDevice, vkSwapchain, null);
     defer std.log.info("Deinit vulkan swapchain OK", .{});
+}
+
+// =VkImages===========================================================================================================
+
+/// Memory of the image inside the swapchain
+pub fn initVkImages(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkSwapchain: c.VkSwapchainKHR,
+) ![]c.VkImage {
+    std.log.info("Trying to get images...", .{});
+    errdefer std.log.info("Trying to get images failed", .{});
+
+    var count: u32 = 0;
+    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, null));
+    const images = try allocator.alloc(c.VkImage, count);
+    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, @ptrCast(images)));
+
+    std.log.info("Acquired {} images", .{count});
+
+    defer std.log.info("Trying to get images...", .{});
+    return images;
+}
+
+pub fn deinitVkImages(
+    allocator: std.mem.Allocator,
+    vkImages: []c.VkImage,
+) void {
+    defer allocator.free(vkImages);
+
+    defer std.log.info("Deinit images OK", .{});
+}
+
+pub fn initVkImageViews(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkImages: []c.VkImage,
+    selectedSurfaceFormat: c.VkSurfaceFormatKHR,
+) ![]c.VkImageView {
+    std.log.info("Trying to get image views...", .{});
+    errdefer std.log.info("Trying to get image views failed", .{});
+
+    const vkImageViews = try allocator.alloc(c.VkImageView, vkImages.len);
+    for (0..vkImages.len) |i| {
+        try handleError(c.vkCreateImageView(vkDevice, &c.VkImageViewCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = vkImages[i],
+            .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+            .format = selectedSurfaceFormat.format,
+            .components = c.VkComponentMapping{
+                .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = c.VkImageSubresourceRange{
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        }, null, &vkImageViews[i]));
+    }
+
+    defer std.log.info("Trying to get image views OK", .{});
+    return vkImageViews;
+}
+
+pub fn deinitVkImageViews(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkImageViews: []c.VkImageView) void {
+    for (0..vkImageViews.len) |i| {
+        c.vkDestroyImageView(vkDevice, vkImageViews[i], null);
+    }
+    allocator.free(vkImageViews);
+
+    defer std.log.info("Deinit image views OK", .{});
+}
+
+// =Shaders============================================================================================================
+pub fn initVkShaderModule(comptime path: anytype, vkDevice: c.VkDevice) !c.VkShaderModule {
+    var vk_shader_module: c.VkShaderModule = undefined;
+
+    std.log.info("Trying to init shader module with path '{s}'...", .{path});
+    errdefer std.log.info("Trying to init shader module with path '{s}' failed", .{path});
+
+    const code = @embedFile(path);
+    try handleError(c.vkCreateShaderModule(vkDevice, &c.VkShaderModuleCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .codeSize = code.len,
+        .pCode = @ptrCast(@alignCast(code)),
+    }, null, &vk_shader_module));
+
+    defer std.log.info("Trying to init shader module with path '{s}' OK", .{path});
+    return vk_shader_module;
+}
+
+pub fn deinitVkShaderModule(
+    vkDevice: c.VkDevice,
+    vkShaderModule: c.VkShaderModule,
+) void {
+    c.vkDestroyShaderModule(vkDevice, vkShaderModule, null);
+
+    defer std.log.info("Deinit vulkan shader module OK", .{});
+}
+
+// =GraphicsPipeline===================================================================================================
+
+pub fn initVkRenderPass(
+    vkDevice: c.VkDevice,
+    vkSurfaceFormat: c.VkSurfaceFormatKHR,
+) !c.VkRenderPass {
+    var vk_render_pass: c.VkRenderPass = undefined;
+
+    std.log.info("Trying to init render pass...", .{});
+    errdefer std.log.info("Trying to init render pass failed", .{});
+
+    try handleError(c.vkCreateRenderPass(vkDevice, &c.VkRenderPassCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .attachmentCount = 1,
+        .pAttachments = &[_]c.VkAttachmentDescription{
+            c.VkAttachmentDescription{
+                .flags = 0,
+                .format = vkSurfaceFormat.format,
+                .samples = c.VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            },
+        },
+        .subpassCount = 1,
+        .pSubpasses = &[_]c.VkSubpassDescription{
+            c.VkSubpassDescription{
+                .flags = 0,
+                .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                .inputAttachmentCount = 0,
+                .pInputAttachments = null,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &c.VkAttachmentReference{
+                    .attachment = 0,
+                    .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                .pResolveAttachments = null,
+                .pDepthStencilAttachment = null,
+                .preserveAttachmentCount = 0,
+                .pPreserveAttachments = null,
+            },
+        },
+        .dependencyCount = 1,
+        .pDependencies = &c.VkSubpassDependency{
+            .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0,
+        },
+    }, null, &vk_render_pass));
+
+    defer std.log.info("Trying to init render pass...", .{});
+    return vk_render_pass;
+}
+
+pub fn deinitVkRenderPass(
+    vkDevice: c.VkDevice,
+    vkRenderPass: c.VkRenderPass,
+) void {
+    c.vkDestroyRenderPass(vkDevice, vkRenderPass, null);
+
+    defer std.log.info("Deinit vulkan render pass OK", .{});
+}
+
+pub fn initVkDescriptorSetLayout(
+    vkDevice: c.VkDevice,
+) !c.VkDescriptorSetLayout {
+    var vkDescriptorSetLayout: c.VkDescriptorSetLayout = undefined;
+
+    std.log.info("Trying to init vulkan descriptor set layout...", .{});
+    errdefer std.log.err("Trying to init vulkan descriptor set layout", .{});
+
+    try handleError(c.vkCreateDescriptorSetLayout(
+        vkDevice,
+        &c.VkDescriptorSetLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 2,
+            .pBindings = &[_]c.VkDescriptorSetLayoutBinding{
+                c.VkDescriptorSetLayoutBinding{
+                    .binding = 0,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount = 1,
+                    .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .pImmutableSamplers = null,
+                },
+                c.VkDescriptorSetLayoutBinding{
+                    .binding = 1,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .pImmutableSamplers = null,
+                },
+            },
+        },
+        null,
+        &vkDescriptorSetLayout,
+    ));
+
+    defer std.log.info("Trying to init vulkan descriptor set layout OK", .{});
+    return vkDescriptorSetLayout;
+}
+
+pub fn deinitVkDescriptorSetLayout(vkDevice: c.VkDevice, vkDescriptorSetLayout: c.VkDescriptorSetLayout) void {
+    c.vkDestroyDescriptorSetLayout(vkDevice, vkDescriptorSetLayout, null);
+    std.log.info("Deinit descriptor set layout OK", .{});
+}
+
+pub fn initVkPipelineLayout(
+    vkDevice: c.VkDevice,
+    vkDescriptorSetLayout: c.VkDescriptorSetLayout,
+) !c.VkPipelineLayout {
+    var vkPipelineLayout: c.VkPipelineLayout = undefined;
+
+    std.log.info("Trying to init pipeline layout...", .{});
+    errdefer std.log.info("Trying to init pipeline layout failed", .{});
+
+    try handleError(c.vkCreatePipelineLayout(
+        vkDevice,
+        &c.VkPipelineLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &vkDescriptorSetLayout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &c.VkPushConstantRange{
+                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
+                .offset = 0,
+                .size = 8, //TODO: @sizeOf(Mat4),
+            },
+        },
+        null,
+        &vkPipelineLayout,
+    ));
+
+    defer std.log.info("Trying to init pipeline layout OK", .{});
+    return vkPipelineLayout;
+}
+
+pub fn deinitVkPipelineLayout(
+    vkDevice: c.VkDevice,
+    vkPipelineLayout: c.VkPipelineLayout,
+) void {
+    c.vkDestroyPipelineLayout(vkDevice, vkPipelineLayout, null);
+    defer std.log.info("Deinit vulkan pipeline layout OK", .{});
+}
+
+pub fn initVkGraphicsPipeline(
+    vkDevice: c.VkDevice,
+    vkSwapchainExtent: c.VkExtent2D,
+    vkRenderPass: c.VkRenderPass,
+    vkPipelineLayout: c.VkPipelineLayout,
+    vkShaderModuleVert: c.VkShaderModule,
+    vkShaderModuleFrag: c.VkShaderModule,
+) !c.VkPipeline {
+    var vkGraphicsPipeline: c.VkPipeline = undefined;
+
+    std.log.info("Trying to init graphics pipeline...", .{});
+    errdefer std.log.info("Trying to init graphics pipeline failed", .{});
+
+    //
+    try handleError(c.vkCreateGraphicsPipelines(
+        vkDevice,
+        null,
+        1,
+        &c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &[_]c.VkPipelineShaderStageCreateInfo{
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vkShaderModuleVert,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = vkShaderModuleFrag,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            },
+            .pVertexInputState = &c.VkPipelineVertexInputStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .vertexBindingDescriptionCount = Vertex.getVkBindingDiscription().len,
+                .pVertexBindingDescriptions = &Vertex.getVkBindingDiscription(),
+                .vertexAttributeDescriptionCount = Vertex.getVkAttributeDiscription().len,
+                .pVertexAttributeDescriptions = &Vertex.getVkAttributeDiscription(),
+            },
+            .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                .primitiveRestartEnable = c.VK_FALSE,
+            },
+            .pTessellationState = null,
+            .pViewportState = &c.VkPipelineViewportStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .viewportCount = 1,
+                // NOTE: negative viewport trick
+                .pViewports = &c.VkViewport{
+                    .x = 0,
+                    .y = @floatFromInt(vkSwapchainExtent.height),
+                    .width = @floatFromInt(vkSwapchainExtent.width),
+                    .height = -@as(f32, @floatFromInt(vkSwapchainExtent.height)),
+                    .minDepth = 0,
+                    .maxDepth = 1,
+                },
+                .scissorCount = 1,
+                .pScissors = &c.VkRect2D{
+                    .offset = c.VkOffset2D{
+                        .x = 0,
+                        .y = 0,
+                    },
+                    .extent = vkSwapchainExtent,
+                },
+            },
+            .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthClampEnable = c.VK_FALSE,
+                .rasterizerDiscardEnable = 0.0,
+                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .cullMode = c.VK_CULL_MODE_BACK_BIT,
+                .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                .depthBiasEnable = c.VK_FALSE,
+                .depthBiasConstantFactor = 0.0,
+                .depthBiasClamp = 0.0,
+                .depthBiasSlopeFactor = 0.0,
+                .lineWidth = 1.0,
+            },
+            .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+                .sampleShadingEnable = c.VK_FALSE,
+                .minSampleShading = 1.0,
+                .pSampleMask = null,
+                .alphaToCoverageEnable = c.VK_FALSE,
+                .alphaToOneEnable = c.VK_FALSE,
+            },
+            .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthTestEnable = c.VK_FALSE,
+                .depthWriteEnable = c.VK_FALSE,
+                .depthCompareOp = c.VK_COMPARE_OP_LESS,
+                .depthBoundsTestEnable = c.VK_FALSE,
+                .stencilTestEnable = c.VK_FALSE,
+                .front = .{},
+                .back = .{},
+                .minDepthBounds = 0,
+                .maxDepthBounds = 1,
+            },
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .logicOpEnable = c.VK_FALSE,
+                .logicOp = c.VK_LOGIC_OP_COPY,
+                .attachmentCount = 1,
+                .pAttachments = &c.VkPipelineColorBlendAttachmentState{
+                    .blendEnable = c.VK_FALSE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+                    .colorBlendOp = c.VK_BLEND_OP_ADD,
+                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+                    .alphaBlendOp = c.VK_BLEND_OP_ADD,
+                    .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | //
+                        c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+                },
+                .blendConstants = [4]f32{ 0, 0, 0, 0 },
+            },
+            .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .dynamicStateCount = 2,
+                .pDynamicStates = &[_]c.VkDynamicState{
+                    c.VK_DYNAMIC_STATE_VIEWPORT,
+                    c.VK_DYNAMIC_STATE_SCISSOR,
+                },
+            },
+            .layout = vkPipelineLayout,
+            .renderPass = vkRenderPass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        },
+        null,
+        &vkGraphicsPipeline,
+    ));
+
+    defer std.log.info("Trying to init graphics pipeline...", .{});
+    return vkGraphicsPipeline;
+}
+
+pub fn deinitVkPipeline(vkDevice: c.VkDevice, vkPipeline: c.VkPipeline) void {
+    c.vkDestroyPipeline(vkDevice, vkPipeline, null);
+    defer std.log.info("Deinit vulkan pipeline OK", .{});
+}
+
+// =FrameBuffers=======================================================================================================
+
+pub fn initFramebuffers(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkImageViews: []c.VkImageView,
+    vkRenderPass: c.VkRenderPass,
+    vkSwapchainExtent: c.VkExtent2D,
+) ![]c.VkFramebuffer {
+    std.log.info("Trying to init framebuffers...", .{});
+    errdefer std.log.info("Trying to init framebuffers failed", .{});
+
+    var vkFramebuffers = try allocator.alloc(c.VkFramebuffer, vkImageViews.len);
+
+    for (0..vkImageViews.len) |i| {
+        try handleError(c.vkCreateFramebuffer(
+            vkDevice,
+            &c.VkFramebufferCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .renderPass = vkRenderPass,
+                .attachmentCount = 1,
+                .pAttachments = &[_]c.VkImageView{
+                    vkImageViews[i],
+                },
+                .width = vkSwapchainExtent.width,
+                .height = vkSwapchainExtent.height,
+                .layers = 1,
+            },
+            null,
+            &vkFramebuffers[i],
+        ));
+    }
+
+    defer std.log.info("Trying to init framebuffers...", .{});
+    return vkFramebuffers;
+}
+
+pub fn deinitFramebuffers(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkFramebuffers: []c.VkFramebuffer,
+) void {
+    for (0..vkFramebuffers.len) |i| {
+        c.vkDestroyFramebuffer(vkDevice, vkFramebuffers[i], null);
+    }
+
+    allocator.free(vkFramebuffers);
+
+    defer std.log.info("Deinit vulkan framebuffers OK", .{});
+}
+
+// =CommandBuffers=====================================================================================================
+
+pub fn initCommandPool(
+    vkDevice: c.VkDevice,
+    selectedGraphicsQueueIndex: u32,
+) !c.VkCommandPool {
+    var vkCommandPool: c.VkCommandPool = undefined;
+
+    std.log.info("Trying to init command pool...", .{});
+    errdefer std.log.info("Trying to init command pool failed", .{});
+
+    try handleError(c.vkCreateCommandPool(
+        vkDevice,
+        &c.VkCommandPoolCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = selectedGraphicsQueueIndex,
+        },
+        null,
+        &vkCommandPool,
+    ));
+
+    defer std.log.info("Trying to init command pool OK", .{});
+    return vkCommandPool;
+}
+
+pub fn deinitCommandPool(vkDevice: c.VkDevice, vkCommandPool: c.VkCommandPool) void {
+    c.vkDestroyCommandPool(vkDevice, vkCommandPool, null);
+    defer std.log.info("Deinit vulkan command pool OK", .{});
+}
+
+pub fn initCommandBuffers(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkCommandPool: c.VkCommandPool,
+    bufferCount: usize,
+) ![]c.VkCommandBuffer {
+    var vkCommandBuffers: []c.VkCommandBuffer = undefined;
+
+    std.log.info("Trying to init command buffers...", .{});
+    errdefer std.log.info("Trying to init command buffers failed", .{});
+
+    vkCommandBuffers = try allocator.alloc(c.VkCommandBuffer, bufferCount);
+
+    try handleError(c.vkAllocateCommandBuffers(
+        vkDevice,
+        &c.VkCommandBufferAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = vkCommandPool,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = @intCast(bufferCount),
+        },
+        @ptrCast(vkCommandBuffers),
+    ));
+
+    defer std.log.info("Trying to init command buffers OK", .{});
+    return vkCommandBuffers;
+}
+
+pub fn deinitCommandBuffers(
+    allocator: std.mem.Allocator,
+    vkCommandBuffers: []c.VkCommandBuffer,
+) void {
+    std.log.info("Trying to free command buffers...", .{});
+    allocator.free(vkCommandBuffers);
+    defer std.log.info("Trying to free command buffer OK", .{});
+}
+
+// =Buffers============================================================================================================
+
+pub fn begOneTimeCommand(
+    vkDevice: c.VkDevice,
+    vkCommandPool: c.VkCommandPool,
+) !c.VkCommandBuffer {
+    var vkCommandBuffer: c.VkCommandBuffer = undefined;
+    try handleError(c.vkAllocateCommandBuffers(vkDevice, &c.VkCommandBufferAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = null,
+        .commandPool = vkCommandPool,
+        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    }, &vkCommandBuffer));
+
+    try handleError(c.vkBeginCommandBuffer(vkCommandBuffer, &c.VkCommandBufferBeginInfo{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = null,
+        .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = null,
+    }));
+
+    return vkCommandBuffer;
+}
+
+pub fn endOneTimeCommand(
+    vkDevice: c.VkDevice,
+    vkGraphicsQueue: c.VkQueue,
+    vkCommandBuffer: c.VkCommandBuffer,
+    vkCommandPool: c.VkCommandPool,
+) !void {
+    try handleError(c.vkEndCommandBuffer(vkCommandBuffer));
+
+    try handleError(c.vkQueueSubmit(vkGraphicsQueue, 1, &c.VkSubmitInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = null,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = null,
+        .pWaitDstStageMask = null,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &vkCommandBuffer,
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = null,
+    }, null));
+
+    try handleError(c.vkQueueWaitIdle(vkGraphicsQueue));
+
+    c.vkFreeCommandBuffers(vkDevice, vkCommandPool, 1, &vkCommandBuffer);
+}
+
+pub fn bufferCopy(
+    vkDevice: c.VkDevice,
+    vkCommandPool: c.VkCommandPool,
+    vkGraphicsQueue: c.VkQueue,
+    srcBuffer: c.VkBuffer,
+    dstBuffer: c.VkBuffer,
+    vkDeviceSize: c.VkDeviceSize,
+) !void {
+    const vkCommandBuffer: c.VkCommandBuffer = try begOneTimeCommand(vkDevice, vkCommandPool);
+
+    {
+        c.vkCmdCopyBuffer(vkCommandBuffer, srcBuffer, dstBuffer, 1, &c.VkBufferCopy{
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = vkDeviceSize,
+        });
+    }
+
+    try endOneTimeCommand(vkDevice, vkGraphicsQueue, vkCommandBuffer, vkCommandPool);
+}
+
+fn findMemoryType(
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    vkTypeFilter: u32,
+    vkMemoryPropertyFlags: c.VkMemoryPropertyFlags,
+) !u32 {
+    var vkPhysicalDeviceMemoryProperties: c.VkPhysicalDeviceMemoryProperties = undefined;
+    c.vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, &vkPhysicalDeviceMemoryProperties);
+
+    for (0..vkPhysicalDeviceMemoryProperties.memoryTypeCount) |i| {
+        const mask = @as(u32, 1) << @as(u5, @intCast(i));
+        if ((vkTypeFilter & mask) > 0 and
+            (vkPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & vkMemoryPropertyFlags) == //
+                vkMemoryPropertyFlags)
+        {
+            return @intCast(i);
+        }
+    }
+
+    return error.VkError;
+}
+
+fn initBuffer(
+    vkDevice: c.VkDevice,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    vkDeviceSize: c.VkDeviceSize,
+    vkBufferUsageFlags: c.VkBufferUsageFlags,
+    vkMemoryPropertyFlags: c.VkMemoryPropertyFlags,
+    vkBuffer: *c.VkBuffer,
+    vkBufferMemory: *c.VkDeviceMemory,
+) !void {
+    std.log.info("Trying to init buffer...", .{});
+    errdefer std.log.info("Trying to init buffer failed", .{});
+
+    try handleError(c.vkCreateBuffer(
+        vkDevice,
+        &c.VkBufferCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = vkDeviceSize,
+            .usage = vkBufferUsageFlags,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        },
+        null,
+        vkBuffer,
+    ));
+
+    var vkMemoryRequirements: c.VkMemoryRequirements = undefined;
+    c.vkGetBufferMemoryRequirements(vkDevice, vkBuffer.*, &vkMemoryRequirements);
+
+    try handleError(c.vkAllocateMemory(vkDevice, &c.VkMemoryAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = null,
+        .allocationSize = vkMemoryRequirements.size,
+        .memoryTypeIndex = try findMemoryType(
+            vkPhysicalDevice,
+            vkMemoryRequirements.memoryTypeBits,
+            vkMemoryPropertyFlags,
+        ),
+    }, null, vkBufferMemory));
+
+    try handleError(c.vkBindBufferMemory(vkDevice, vkBuffer.*, vkBufferMemory.*, 0));
+
+    defer std.log.info("Trying to init buffer OK", .{});
+}
+
+fn deinitBuffer(
+    vkDevice: c.VkDevice,
+    vkBuffer: c.VkBuffer,
+    vkBufferMemory: c.VkDeviceMemory,
+) void {
+    c.vkDestroyBuffer(vkDevice, vkBuffer, null);
+    c.vkFreeMemory(vkDevice, vkBufferMemory, null);
+
+    defer std.log.info("Deinit vulkan buffer OK", .{});
+}
+
+// =VertexBufferSet===================================================================================================
+
+pub const VertexBufferSet = struct {
+    vkBuffers: []c.VkBuffer,
+    vkBuffersMemory: []c.VkDeviceMemory,
+    vkBuffersMapped: []*anyopaque,
+    max_vertices: usize,
+};
+
+pub fn initVertexBufferSet(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    max_vertices: usize,
+    bufferCount: usize,
+) !VertexBufferSet {
+    std.log.info("Trying to init dynamic vertex buffers...", .{});
+    errdefer std.log.info("Trying to init dynamic vertex buffers failed", .{});
+
+    var vertex_buffer_set: VertexBufferSet = undefined;
+    vertex_buffer_set.max_vertices = max_vertices;
+    vertex_buffer_set.vkBuffers = try allocator.alloc(c.VkBuffer, bufferCount);
+    vertex_buffer_set.vkBuffersMemory = try allocator.alloc(c.VkDeviceMemory, bufferCount);
+    vertex_buffer_set.vkBuffersMapped = try allocator.alloc(*anyopaque, bufferCount);
+
+    const buffer_size = @sizeOf(Vertex) * max_vertices;
+
+    for (0..bufferCount) |i| {
+        try initBuffer(
+            vkDevice,
+            vkPhysicalDevice,
+            buffer_size,
+            c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &vertex_buffer_set.vkBuffers[i],
+            &vertex_buffer_set.vkBuffersMemory[i],
+        );
+
+        try handleError(c.vkMapMemory(
+            vkDevice,
+            vertex_buffer_set.vkBuffersMemory[i],
+            0,
+            buffer_size,
+            0,
+            @ptrCast(&vertex_buffer_set.vkBuffersMapped[i]),
+        ));
+    }
+
+    defer std.log.info("Trying to init dynamic vertex buffers OK", .{});
+    return vertex_buffer_set;
+}
+
+pub fn deinitVertexBufferSet(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vertex_buffer_set: VertexBufferSet,
+) void {
+    for (0..vertex_buffer_set.vkBuffers.len) |i| {
+        deinitBuffer(vkDevice, vertex_buffer_set.vkBuffers[i], vertex_buffer_set.vkBuffersMemory[i]);
+    }
+    allocator.free(vertex_buffer_set.vkBuffers);
+    allocator.free(vertex_buffer_set.vkBuffersMemory);
+    allocator.free(vertex_buffer_set.vkBuffersMapped);
+    defer std.log.info("Deinit vulkan dynamic vertex buffers OK", .{});
+}
+
+// =UniformBufferSet===================================================================================================
+
+pub const UniformBufferSet = struct {
+    vkUniformBuffers: []c.VkBuffer,
+    vkUniformBuffersMemory: []c.VkDeviceMemory,
+    vkUniformBuffersMapped: []*anyopaque,
+};
+
+pub fn initUniformBufferSet(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    bufferCount: usize,
+) !UniformBufferSet {
+    std.log.info("Trying to init uniform buffers...", .{});
+    errdefer std.log.info("Trying to init uniform buffers failed", .{});
+
+    var uniform_buffer_set: UniformBufferSet = undefined;
+    uniform_buffer_set.vkUniformBuffers = try allocator.alloc(c.VkBuffer, bufferCount);
+    uniform_buffer_set.vkUniformBuffersMemory = try allocator.alloc(c.VkDeviceMemory, bufferCount);
+    uniform_buffer_set.vkUniformBuffersMapped = try allocator.alloc(*anyopaque, bufferCount);
+
+    for (0..bufferCount) |i| {
+        try initBuffer(
+            vkDevice,
+            vkPhysicalDevice,
+            @sizeOf(Uniform),
+            c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &uniform_buffer_set.vkUniformBuffers[i],
+            &uniform_buffer_set.vkUniformBuffersMemory[i],
+        );
+
+        try handleError(c.vkMapMemory(
+            vkDevice,
+            uniform_buffer_set.vkUniformBuffersMemory[i],
+            0,
+            @sizeOf(Uniform),
+            0,
+            @ptrCast(&uniform_buffer_set.vkUniformBuffersMapped[i]),
+        ));
+    }
+
+    defer std.log.info("Trying to init uniform buffers OK", .{});
+    return uniform_buffer_set;
+}
+
+pub fn deinitUniformBufferSet(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    uniform_buffer_set: UniformBufferSet,
+) void {
+    for (0..uniform_buffer_set.vkUniformBuffers.len) |i| {
+        deinitBuffer(vkDevice, uniform_buffer_set.vkUniformBuffers[i], uniform_buffer_set.vkUniformBuffersMemory[i]);
+    }
+    allocator.free(uniform_buffer_set.vkUniformBuffers);
+    allocator.free(uniform_buffer_set.vkUniformBuffersMemory);
+    allocator.free(uniform_buffer_set.vkUniformBuffersMapped);
+
+    defer std.log.info("Deinit vulkan uniform buffers OK", .{});
 }
