@@ -1,6 +1,7 @@
 [[vk::binding(0, 0)]]
 cbuffer ViewUniforms {
     float2 screen_size;
+    float2 cube_pos;
 }
 
 struct VertexInput {
@@ -17,9 +18,9 @@ struct VertexOutput {
 VertexOutput main(VertexInput input) {
     VertexOutput output;
     
-    float2 ndc = (input.position / screen_size) * 2.0 - 1.0;
-    
-    output.position = float4(ndc, 0.0, 1.0);
+    float2 transformed_pos = input.position + cube_pos;
+    float2 ndc = (transformed_pos / screen_size) * 2.0 - 1.0;
+    output.position = float4(ndc.x, ndc.y, 0.0, 1.0);
     output.color = input.color;
     
     return output;

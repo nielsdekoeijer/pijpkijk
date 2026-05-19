@@ -3,8 +3,20 @@ const Io = std.Io;
 const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
 const util = @import("util.zig");
+const types = @import("types.zig");
 
 pub const FRAMES_IN_FLIGHT = 2;
+
+const rect_verts = [_]types.Vertex{
+    // Triangle 1
+    .{ .pos = .{ 100.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 100.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 300.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+    // Triangle 2
+    .{ .pos = .{ 300.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 100.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 300.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
+};
 
 pub const App = struct {
     window: *c.struct_SDL_Window,
@@ -34,6 +46,16 @@ pub const App = struct {
     command_buffers: []c.VkCommandBuffer,
     uniform_buffer_set: util.UniformBufferSet,
     vertex_buffer_set: util.VertexBufferSet,
+    image_availible_semaphore: []c.VkSemaphore,
+    render_finished_semaphore: []c.VkSemaphore,
+    in_flight_fences: []c.VkFence,
+    descriptor_pool: c.VkDescriptorPool,
+    descriptor_sets: []c.VkDescriptorSet,
+    graphics_queue: c.VkQueue,
+    present_queue: c.VkQueue,
+
+    // TEMP
+    cube_pos: [2]f32 = .{ 200.0, 200.0 },
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -79,6 +101,9 @@ pub const App = struct {
             self.physical_device,
         );
         errdefer util.deinitVkDevice(self.device);
+
+        c.vkGetDeviceQueue(self.device, self.graphics_queue_index, 0, &self.graphics_queue);
+        c.vkGetDeviceQueue(self.device, self.present_queue_index, 0, &self.present_queue);
 
         // =CreateVkSwapchain==========================================================================================
         self.swapchain = try util.initVkSwapchain(
@@ -170,40 +195,242 @@ pub const App = struct {
         );
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.vertex_buffer_set);
 
+        // =Semaphores=================================================================================================
+        self.render_finished_semaphore = try util.initVkSemaphores(allocator, self.device, FRAMES_IN_FLIGHT);
+        errdefer util.deinitVkSemaphores(allocator, self.device, self.render_finished_semaphore);
+
+        self.image_availible_semaphore = try util.initVkSemaphores(allocator, self.device, FRAMES_IN_FLIGHT);
+        errdefer util.deinitVkSemaphores(allocator, self.device, self.image_availible_semaphore);
+
+        self.in_flight_fences = try util.initVkFences(allocator, self.device, FRAMES_IN_FLIGHT);
+        errdefer util.deinitVkFences(allocator, self.device, self.in_flight_fences);
+
+        // =Descriptors================================================================================================
+        self.descriptor_pool = try util.initVkDescriptorPool(self.device, self.uniform_buffer_set.vkUniformBuffers);
+        errdefer util.deinitVkDescriptorPool(self.device, self.descriptor_pool);
+
+        self.descriptor_sets = try util.initVkDescriptorSets(
+            allocator,
+            self.device,
+            self.descriptor_set_layout,
+            self.descriptor_pool,
+            self.uniform_buffer_set.vkUniformBuffers,
+        );
+        errdefer util.deinitVkDescriptorSets(allocator, self.descrptor_sets);
+
         return self;
     }
 
     pub fn run(self: *App) !void {
-        _ = self;
-
         std.log.info("Running loop...", .{});
         errdefer std.log.info("Running loop exited with failure", .{});
 
         var running = true;
+        var current_frame: usize = 0;
+        var window_resized = false;
         var e: c.SDL_Event = undefined;
 
         while (running) {
             while (c.SDL_PollEvent(&e) != false) {
                 switch (e.type) {
                     c.SDL_EVENT_QUIT, c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => running = false,
-
-                    else => {},
-
+                    c.SDL_EVENT_WINDOW_RESIZED, c.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
+                        window_resized = true;
+                    },
                     c.SDL_EVENT_KEY_DOWN => {
+                        const move_speed = 10.0;
                         switch (e.key.key) {
-                            c.SDLK_ESCAPE => {
-                                running = false;
-                            },
+                            c.SDLK_ESCAPE => running = false,
+                            c.SDLK_Q => running = false,
+                            c.SDLK_W => self.cube_pos[1] += move_speed,
+                            c.SDLK_S => self.cube_pos[1] -= move_speed,
+                            c.SDLK_A => self.cube_pos[0] -= move_speed,
+                            c.SDLK_D => self.cube_pos[0] += move_speed,
                             else => {},
                         }
                     },
+                    else => {},
                 }
             }
 
-            running = false;
+            // 1. If an SDL event told us the window resized, recreate BEFORE acquiring.
+            if (window_resized) {
+                window_resized = false;
+                try self.recreateSwapchain();
+            }
+
+            // 2. Wait for the GPU to finish the previous frame using this slot
+            try handleError(c.vkWaitForFences(self.device, 1, &self.in_flight_fences[current_frame], c.VK_TRUE, std.math.maxInt(u64)));
+
+            // 3. Acquire the next image from the swapchain
+            var image_index: u32 = undefined;
+            const acquire_result = c.vkAcquireNextImageKHR(
+                self.device,
+                self.swapchain,
+                std.math.maxInt(u64),
+                self.image_availible_semaphore[current_frame],
+                null,
+                &image_index,
+            );
+
+            // Handle acquire failures (on failure, the semaphore is left unsignaled, so continue is safe)
+            if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
+                try self.recreateSwapchain();
+                continue;
+            } else if (acquire_result != c.VK_SUCCESS and acquire_result != c.VK_SUBOPTIMAL_KHR) {
+                return error.VulkanAcquireFailed;
+            }
+
+            // Only reset the fence once we know we are definitely submitting work
+            try handleError(c.vkResetFences(self.device, 1, &self.in_flight_fences[current_frame]));
+
+            // Update Memory Mapped Buffers (Vertex + Uniform)
+            const vert_map: [*]types.Vertex = @ptrCast(@alignCast(self.vertex_buffer_set.vkBuffersMapped[current_frame]));
+            @memcpy(vert_map[0..6], &rect_verts);
+
+            // In step 3 (Update Memory Mapped Buffers)
+            const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
+            uniform_map[0] = .{
+                .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
+                .cube_pos = self.cube_pos,
+            };
+
+            // Record Command Buffer
+            const cmd = self.command_buffers[current_frame];
+            try handleError(c.vkResetCommandBuffer(cmd, 0)); // Catch error here!
+
+            const begin_info = c.VkCommandBufferBeginInfo{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = null,
+                .flags = 0,
+                .pInheritanceInfo = null,
+            };
+            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info)); // Catch error here!
+
+            const clear_value = c.VkClearValue{ .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } } };
+            const render_pass_info = c.VkRenderPassBeginInfo{
+                .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .pNext = null,
+                .renderPass = self.render_pass,
+                .framebuffer = self.framebuffers[image_index],
+                .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_extent },
+                .clearValueCount = 1,
+                .pClearValues = &clear_value,
+            };
+
+            c.vkCmdBeginRenderPass(cmd, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
+            c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+
+            const offsets = [_]c.VkDeviceSize{0};
+            c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.vertex_buffer_set.vkBuffers[current_frame], &offsets);
+
+            c.vkCmdBindDescriptorSets(
+                cmd,
+                c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                self.pipeline_layout,
+                0,
+                1,
+                &self.descriptor_sets[current_frame],
+                0,
+                null,
+            );
+
+            const viewport = c.VkViewport{
+                .x = 0.0,
+                .y = @floatFromInt(self.swap_extent.height),
+                .width = @floatFromInt(self.swap_extent.width),
+                .height = -@as(f32, @floatFromInt(self.swap_extent.height)),
+                .minDepth = 0.0,
+                .maxDepth = 1.0,
+            };
+            c.vkCmdSetViewport(cmd, 0, 1, @ptrCast(&viewport));
+
+            const scissor = c.VkRect2D{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.swap_extent,
+            };
+            c.vkCmdSetScissor(cmd, 0, 1, @ptrCast(&scissor));
+
+            c.vkCmdDraw(cmd, 6, 1, 0, 0);
+            c.vkCmdEndRenderPass(cmd);
+            try handleError(c.vkEndCommandBuffer(cmd)); // Catch error here!
+
+            // 5. Submit to Graphics Queue (Added explicit @ptrCasts to guarantee C-compatibility)
+            const wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+            const submit_info = c.VkSubmitInfo{
+                .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .pNext = null,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = @ptrCast(&self.image_availible_semaphore[current_frame]),
+                .pWaitDstStageMask = @ptrCast(&wait_stages),
+                .commandBufferCount = 1,
+                .pCommandBuffers = @ptrCast(&cmd),
+                .signalSemaphoreCount = 1,
+                .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[current_frame]),
+            };
+
+            // Catch error here! If this fails, the app will panic immediately instead of generating un-signaled wait errors.
+            try handleError(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.in_flight_fences[current_frame]));
+
+            // 6. Present to Screen
+            const present_info = c.VkPresentInfoKHR{
+                .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                .pNext = null,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[current_frame]),
+                .swapchainCount = 1,
+                .pSwapchains = @ptrCast(&self.swapchain),
+                .pImageIndices = &image_index,
+                .pResults = null,
+            };
+
+            const present_result = c.vkQueuePresentKHR(self.present_queue, &present_info);
+
+            // Check if the swapchain became invalid during presentation
+            if (present_result == c.VK_ERROR_OUT_OF_DATE_KHR or present_result == c.VK_SUBOPTIMAL_KHR) {
+                // Flag a resize for the start of the next loop iteration
+                window_resized = true;
+            } else if (present_result != c.VK_SUCCESS) {
+                return error.VulkanPresentFailed;
+            }
+
+            // 7. Advance Frame
+            current_frame = (current_frame + 1) % FRAMES_IN_FLIGHT;
         }
 
+        // Ensure the GPU has finished everything before tearing down
+        _ = c.vkDeviceWaitIdle(self.device);
+
         defer std.log.info("Running loop OK", .{});
+    }
+
+    pub fn recreateSwapchain(self: *App) !void {
+        std.log.info("Recreating swapchain...", .{});
+        errdefer std.log.info("Recreating swapchain failed", .{});
+
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
+        while (w == 0 or h == 0) {
+            _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
+            _ = c.SDL_WaitEvent(null); // Pause the thread while minimized
+        }
+
+        _ = c.vkDeviceWaitIdle(self.device);
+
+        util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
+        util.deinitVkImageViews(self.allocator, self.device, self.image_views);
+        util.deinitVkImages(self.allocator, self.images);
+        util.deinitVkSwapchain(self.device, self.swapchain);
+
+        self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
+        self.swap_extent = try util.getVkExtent(self.window, self.surface_capabilities);
+
+        self.swapchain = try util.initVkSwapchain(self.device, self.surface, self.surface_capabilities, self.surface_format, self.swap_extent, self.present_mode, self.graphics_queue_index, self.present_queue_index);
+        self.images = try util.initVkImages(self.allocator, self.device, self.swapchain);
+        self.image_views = try util.initVkImageViews(self.allocator, self.device, self.images, self.surface_format);
+        self.framebuffers = try util.initFramebuffers(self.allocator, self.device, self.image_views, self.render_pass, self.swap_extent);
+        defer std.log.info("Recreating swapchain OK", .{});
     }
 
     pub fn deinit(self: *App) void {
@@ -226,5 +453,10 @@ pub const App = struct {
         defer util.deinitCommandBuffers(self.allocator, self.command_buffers);
         defer util.deinitUniformBufferSet(self.allocator, self.device, self.uniform_buffer_set);
         defer util.deinitVertexBufferSet(self.allocator, self.device, self.vertex_buffer_set);
+        defer util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
+        defer util.deinitVkSemaphores(self.allocator, self.device, self.image_availible_semaphore);
+        defer util.deinitVkFences(self.allocator, self.device, self.in_flight_fences);
+        defer util.deinitVkDescriptorPool(self.device, self.descriptor_pool);
+        defer util.deinitVkDescriptorSets(self.allocator, self.descriptor_sets);
     }
 };

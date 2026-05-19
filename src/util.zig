@@ -1432,7 +1432,7 @@ pub fn initVkGraphicsPipeline(
                 .depthClampEnable = c.VK_FALSE,
                 .rasterizerDiscardEnable = 0.0,
                 .polygonMode = c.VK_POLYGON_MODE_FILL,
-                .cullMode = c.VK_CULL_MODE_BACK_BIT,
+                .cullMode = c.VK_CULL_MODE_NONE,
                 .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
                 .depthBiasEnable = c.VK_FALSE,
                 .depthBiasConstantFactor = 0.0,
@@ -1913,4 +1913,239 @@ pub fn deinitUniformBufferSet(
     allocator.free(uniform_buffer_set.vkUniformBuffersMapped);
 
     defer std.log.info("Deinit vulkan uniform buffers OK", .{});
+}
+
+// =Semaphores=========================================================================================================
+pub fn initVkSemaphore(vkDevice: c.VkDevice) !c.VkSemaphore {
+    var vkSemaphore: c.VkSemaphore = undefined;
+
+    std.log.info("Trying to init semaphore...", .{});
+    errdefer std.log.info("Trying to init semaphore failed", .{});
+
+    try handleError(c.vkCreateSemaphore(
+        vkDevice,
+        &c.VkSemaphoreCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+        },
+        null,
+        &vkSemaphore,
+    ));
+
+    defer std.log.info("Trying to init semaphore OK", .{});
+    return vkSemaphore;
+}
+
+pub fn deinitVkSemaphore(
+    vkDevice: c.VkDevice,
+    vkSemaphore: c.VkSemaphore,
+) void {
+    c.vkDestroySemaphore(
+        vkDevice,
+        vkSemaphore,
+        null,
+    );
+
+    errdefer std.log.info("Deinit vulkan semaphore OK", .{});
+}
+
+pub fn initVkSemaphores(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    count: usize,
+) ![]c.VkSemaphore {
+    var vkSemaphores: []c.VkSemaphore = undefined;
+
+    std.log.info("Trying to init {} semaphores...", .{count});
+    errdefer std.log.info("Trying to init {} semaphores failed", .{count});
+
+    vkSemaphores = try allocator.alloc(c.VkSemaphore, count);
+    for (vkSemaphores) |*vkSemaphore| {
+        vkSemaphore.* = try initVkSemaphore(vkDevice);
+    }
+
+    defer std.log.info("Trying to init {} semaphores OK", .{count});
+    return vkSemaphores;
+}
+
+pub fn deinitVkSemaphores(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkSemaphores: []c.VkSemaphore) void {
+    for (vkSemaphores) |vkSemaphore| {
+        deinitVkSemaphore(vkDevice, vkSemaphore);
+    }
+    allocator.free(vkSemaphores);
+
+    defer std.log.info("Deinit {} semaphores OK", .{vkSemaphores.len});
+}
+
+// =Fences=============================================================================================================
+
+pub fn initVkFence(vkDevice: c.VkDevice) !c.VkFence {
+    var vkFence: c.VkFence = undefined;
+
+    std.log.info("Trying to init fence...", .{});
+    errdefer std.log.info("Trying to init fence failed", .{});
+
+    try handleError(c.vkCreateFence(
+        vkDevice,
+        &c.VkFenceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = null,
+            .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
+        },
+        null,
+        &vkFence,
+    ));
+
+    defer std.log.info("Trying to init fence OK", .{});
+    return vkFence;
+}
+
+pub fn deinitVkFence(vkDevice: c.VkDevice, vkFence: c.VkFence) void {
+    c.vkDestroyFence(
+        vkDevice,
+        vkFence,
+        null,
+    );
+    defer std.log.info("Deinit vulkan fence OK", .{});
+}
+
+pub fn initVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, count: usize) ![]c.VkFence {
+    var vkFences: []c.VkFence = undefined;
+
+    std.log.info("Trying to init {} fences...", .{count});
+    errdefer std.log.info("Trying to init {} fences failed", .{count});
+
+    vkFences = try allocator.alloc(c.VkFence, count);
+    for (vkFences) |*vkFence| {
+        vkFence.* = try initVkFence(vkDevice);
+    }
+
+    defer std.log.info("Trying to init {} fences OK", .{count});
+    return vkFences;
+}
+
+pub fn deinitVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkFences: []c.VkFence) void {
+    for (vkFences) |vkFence| {
+        deinitVkFence(vkDevice, vkFence);
+    }
+    allocator.free(vkFences);
+
+    defer std.log.info("Deinit {} fences OK", .{vkFences.len});
+}
+
+// =DescriptorPool=====================================================================================================
+
+pub fn initVkDescriptorPool(
+    vkDevice: c.VkDevice,
+    vkUniformBuffers: []c.VkBuffer,
+) !c.VkDescriptorPool {
+    var vkDescriptorPool: c.VkDescriptorPool = undefined;
+
+    std.log.info("Trying to init descriptor pool with capacity {}...", .{vkUniformBuffers.len});
+    errdefer std.log.info("Trying to init descriptor pool with capacity {} failed", .{vkUniformBuffers.len});
+
+    try handleError(c.vkCreateDescriptorPool(
+        vkDevice,
+        &c.VkDescriptorPoolCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            .maxSets = @intCast(vkUniformBuffers.len),
+            .poolSizeCount = 2,
+            .pPoolSizes = &[_]c.VkDescriptorPoolSize{
+                c.VkDescriptorPoolSize{
+                    .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount = @intCast(vkUniformBuffers.len),
+                },
+                c.VkDescriptorPoolSize{
+                    .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = @intCast(vkUniformBuffers.len),
+                },
+            },
+        },
+        null,
+        &vkDescriptorPool,
+    ));
+
+    defer std.log.info("Trying to init descriptor pool with capacity {} OK", .{vkUniformBuffers.len});
+    return vkDescriptorPool;
+}
+
+pub fn deinitVkDescriptorPool(
+    vkDevice: c.VkDevice,
+    vkDescriptorPool: c.VkDescriptorPool,
+) void {
+    c.vkDestroyDescriptorPool(vkDevice, vkDescriptorPool, null);
+
+    defer std.log.info("Deinit descriptor pool OK", .{});
+}
+
+// =DescriptorSets=====================================================================================================
+
+pub fn initVkDescriptorSets(
+    allocator: std.mem.Allocator,
+    vkDevice: c.VkDevice,
+    vkDescriptorSetLayout: c.VkDescriptorSetLayout,
+    vkDescriptorPool: c.VkDescriptorPool,
+    vkUniformBuffers: []c.VkBuffer,
+) ![]c.VkDescriptorSet {
+    var vkDescriptorSets: []c.VkDescriptorSet = undefined;
+
+    std.log.info("Trying to init descriptor sets...", .{});
+    errdefer std.log.info("Trying to init descriptor sets failed", .{});
+
+    const layouts = try allocator.alloc(c.VkDescriptorSetLayout, vkUniformBuffers.len);
+    defer allocator.free(layouts);
+    for (layouts) |*layout| {
+        layout.* = vkDescriptorSetLayout;
+    }
+
+    vkDescriptorSets = try allocator.alloc(c.VkDescriptorSet, vkUniformBuffers.len);
+    try handleError(c.vkAllocateDescriptorSets(vkDevice, &c.VkDescriptorSetAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = null,
+        .descriptorPool = vkDescriptorPool,
+        .descriptorSetCount = @intCast(vkUniformBuffers.len),
+        .pSetLayouts = @ptrCast(layouts),
+    }, @ptrCast(vkDescriptorSets)));
+
+    for (0..@intCast(vkUniformBuffers.len)) |i| {
+        c.vkUpdateDescriptorSets(
+            vkDevice,
+            1,
+            &[_]c.VkWriteDescriptorSet{
+                c.VkWriteDescriptorSet{
+                    .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = vkDescriptorSets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pImageInfo = null,
+                    .pBufferInfo = &c.VkDescriptorBufferInfo{
+                        .buffer = vkUniformBuffers[i],
+                        .offset = 0,
+                        .range = @sizeOf(Uniform),
+                    },
+                    .pTexelBufferView = null,
+                },
+            },
+            0,
+            null,
+        );
+    }
+
+    defer std.log.info("Trying to init descriptor sets OK", .{});
+    return vkDescriptorSets;
+}
+
+pub fn deinitVkDescriptorSets(
+    allocator: std.mem.Allocator,
+    vkDescriptorSets: []c.VkDescriptorSet,
+) void {
+    allocator.free(vkDescriptorSets);
+
+    defer std.log.info("Deinit descriptor sets OK", .{});
 }

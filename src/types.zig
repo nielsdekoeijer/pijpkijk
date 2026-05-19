@@ -20,6 +20,7 @@ pub const Vec3 = extern struct {
 
 pub const Uniform = struct {
     screen_size: [2]f32,
+    cube_pos: [2]f32, 
 };
 
 pub const Vertex = extern struct {
