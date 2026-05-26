@@ -6,19 +6,21 @@ const handleError = @import("error.zig").handleError;
 
 // =SDL3Initialization=================================================================================================
 
-/// Helper function to initialize SDL3
+/// Helper function to initialize SDL3 with the given flags
 pub fn sdlInit(options: struct {
     flags: c.SDL_InitFlags = c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO,
 }) !void {
     std.log.info("Trying to init SDL3...", .{});
     errdefer std.log.err("Trying to init SDL3 failed", .{});
 
-    try handleError(c.SDL_Init(options.flags));
+    try handleError(
+        c.SDL_Init(options.flags),
+    );
 
     defer std.log.info("Trying to init SDL3 OK", .{});
 }
 
-/// Helper function to deinitlaize SDL3
+/// Helper function to deinitialize SDL3
 pub fn sdlQuit() void {
     c.SDL_Quit();
 
@@ -27,9 +29,9 @@ pub fn sdlQuit() void {
 
 // =SDL3Window=========================================================================================================
 
-/// Helper function to initialize SDL3 window
-pub fn sdlInitWindow(options: *const struct {
-    cname: [*c]const u8 = "window",
+/// Helper function to initialize SDL3 window given some options
+pub fn sdlInitWindow(options: struct {
+    cname: [*:0]const u8 = "window",
     w: usize,
     h: usize,
     flags: c.SDL_WindowFlags = c.SDL_WINDOW_VULKAN | c.SDL_WINDOW_RESIZABLE,
@@ -37,14 +39,18 @@ pub fn sdlInitWindow(options: *const struct {
     std.log.info("Trying to init SDL3 window...", .{});
     errdefer std.log.err("Trying to SDL3 window failed", .{});
 
+    const window = try handleError(
+        c.SDL_CreateWindow(
+            options.cname,
+            @intCast(options.w),
+            @intCast(options.h),
+            options.flags,
+        ),
+    );
+
     defer std.log.info("Trying to init SDL3 window OK", .{});
 
-    return try handleError(c.SDL_CreateWindow(
-        options.cname,
-        @intCast(options.w),
-        @intCast(options.h),
-        options.flags,
-    ));
+    return window;
 }
 
 /// Helper function to destroy an SDL3 window
@@ -1410,9 +1416,9 @@ pub fn initVkGraphicsPipeline(
                 // NOTE: negative viewport trick
                 .pViewports = &c.VkViewport{
                     .x = 0,
-                    .y = @floatFromInt(vkSwapchainExtent.height),
+                    .y = 0,
                     .width = @floatFromInt(vkSwapchainExtent.width),
-                    .height = -@as(f32, @floatFromInt(vkSwapchainExtent.height)),
+                    .height = @as(f32, @floatFromInt(vkSwapchainExtent.height)),
                     .minDepth = 0,
                     .maxDepth = 1,
                 },

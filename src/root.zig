@@ -72,7 +72,7 @@ pub const App = struct {
         errdefer util.sdlQuit();
 
         // =AqcuireWindow==============================================================================================
-        self.window = try util.sdlInitWindow(&.{ .cname = name, .w = default_width, .h = default_height });
+        self.window = try util.sdlInitWindow(.{ .cname = name, .w = default_width, .h = default_height });
         errdefer util.sdlDestroyWindow(self.window);
 
         // =AqcuireVkInstance==========================================================================================
@@ -225,6 +225,8 @@ pub const App = struct {
         std.log.info("Running loop...", .{});
         errdefer std.log.info("Running loop exited with failure", .{});
 
+        var key_down_x: ?f32 = null;
+        var key_down_y: ?f32 = null;
         var running = true;
         var current_frame: usize = 0;
         var window_resized = false;
@@ -233,9 +235,32 @@ pub const App = struct {
         while (running) {
             while (c.SDL_PollEvent(&e) != false) {
                 switch (e.type) {
-                    c.SDL_EVENT_QUIT, c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => running = false,
+                    c.SDL_EVENT_QUIT, c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => {
+                        running = false;
+                    },
                     c.SDL_EVENT_WINDOW_RESIZED, c.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
                         window_resized = true;
+                    },
+                    c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                        std.log.debug("Mouse button down: ({}, {})", .{ e.button.x, e.button.y });
+                        key_down_x = e.button.x;
+                        key_down_y = e.button.y;
+                    },
+                    c.SDL_EVENT_MOUSE_BUTTON_UP => {
+                        std.log.debug("Mouse button lift: ({}, {})", .{ e.button.x, e.button.y });
+                        key_down_x = null;
+                        key_down_y = null;
+                    },
+                    c.SDL_EVENT_MOUSE_MOTION => {
+                        if (key_down_x) |x| {
+                            self.cube_pos[0] += e.button.x - x;
+                            key_down_x = e.button.x;
+                        }
+
+                        if (key_down_y) |y| {
+                            self.cube_pos[1] += e.button.y - y;
+                            key_down_y = e.button.y;
+                        }
                     },
                     c.SDL_EVENT_KEY_DOWN => {
                         const move_speed = 10.0;
@@ -337,9 +362,9 @@ pub const App = struct {
 
             const viewport = c.VkViewport{
                 .x = 0.0,
-                .y = @floatFromInt(self.swap_extent.height),
+                .y = 0,
                 .width = @floatFromInt(self.swap_extent.width),
-                .height = -@as(f32, @floatFromInt(self.swap_extent.height)),
+                .height = @as(f32, @floatFromInt(self.swap_extent.height)),
                 .minDepth = 0.0,
                 .maxDepth = 1.0,
             };
