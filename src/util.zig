@@ -62,7 +62,7 @@ pub fn sdlDestroyWindow(window: *c.SDL_Window) void {
 
 // =ValidationLayers===================================================================================================
 
-/// Debug callback for vulkan
+/// Debug callback injectable into vulkan
 pub export fn vkDebugCallback(
     message_severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT,
     message_type: c.VkDebugUtilsMessageTypeFlagsEXT,
@@ -77,30 +77,36 @@ pub export fn vkDebugCallback(
     return @as(c.VkBool32, 0);
 }
 
-// =VkInstance=========================================================================================================
+// =VkInstanceExtensions===============================================================================================
 
+/// Creates an arraylist of the vulkan extensions requested by SDL3
 fn getSDLRequestedVkInstanceExtensions(
     allocator: std.mem.Allocator,
-) !std.ArrayList([*c]const u8) {
+) !std.ArrayList([*:0]const u8) {
     std.log.debug("Trying to enumerate SDL3 requested vulkan extensions...", .{});
     errdefer std.log.err("Trying to enumerate SDL3 requested vulkan extensions failed", .{});
 
     var count: u32 = 0;
     const extensions_base = c.SDL_Vulkan_GetInstanceExtensions(&count);
     std.log.debug("SDL requests '{}' extensions in total", .{count});
-    var extensions = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
+
+    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
+    errdefer extensions.deinit(allocator);
+
     for (0..count) |i| {
         std.log.debug("SDL requests extension '{s}'", .{extensions_base[i]});
-        try extensions.append(allocator, extensions_base[i]);
+        extensions.appendAssumeCapacity(extensions_base[i]);
     }
 
     defer std.log.debug("Trying to enumerate SDL3 requested vulkan extensions OK", .{});
+
     return extensions;
 }
 
+/// Creates an arraylist of all supported vulkan extensions
 fn getSupportedVkInstanceExtensions(
     allocator: std.mem.Allocator,
-) !std.ArrayList([*c]const u8) {
+) !std.ArrayList([*:0]const u8) {
     std.log.debug("Trying to enumerate supported vulkan instance extensions...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan instance extensions failed", .{});
 
@@ -110,27 +116,34 @@ fn getSupportedVkInstanceExtensions(
 
     const extension_properties = try allocator.alloc(c.VkExtensionProperties, count);
     defer allocator.free(extension_properties);
-    try handleError(c.vkEnumerateInstanceExtensionProperties(null, &count, @ptrCast(extension_properties)));
+    try handleError(c.vkEnumerateInstanceExtensionProperties(null, &count, extension_properties.ptr));
 
-    var extensions = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
-    for (extension_properties) |extensionProperty| {
-        const name = std.mem.sliceTo(&extensionProperty.extensionName, 0);
+    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
+    errdefer {
+        for (extensions.items) |extension| allocator.free(std.mem.span(extension));
+        extensions.deinit(allocator);
+    }
+
+    for (extension_properties) |extension_property| {
+        const name = std.mem.sliceTo(&extension_property.extensionName, 0);
         std.log.debug("Support exists for instance extension '{s}'", .{name});
-        try extensions.append(allocator, try allocator.dupeZ(u8, name));
+        const extension = try allocator.dupeZ(u8, name);
+        errdefer allocator.free(extension);
+        extensions.appendAssumeCapacity(extension);
     }
 
     defer std.log.debug("Trying to enumerate supported vulkan instance extensions OK", .{});
     return extensions;
 }
 
+/// Checks if the requested extensions are supported by vulkan
 fn checkRequestedVkInstanceExtensionsSupported(
     allocator: std.mem.Allocator,
-    requestedExtensions: std.ArrayList([*c]const u8),
+    requested_extensions: []const [*:0]const u8,
 ) !void {
     std.log.debug("Trying to checking if requested vulkan instance extensions are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan instance extensions are supported failed", .{});
 
-    // query supported vulkan instance extensions
     var supported_extensions = try getSupportedVkInstanceExtensions(allocator);
     defer {
         for (supported_extensions.items) |s| allocator.free(std.mem.span(s));
@@ -138,7 +151,7 @@ fn checkRequestedVkInstanceExtensionsSupported(
     }
 
     // find each extension in the supported extension set
-    for (requestedExtensions.items) |requested| {
+    for (requested_extensions) |requested| {
         var found = false;
         for (supported_extensions.items) |supported| {
             if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
@@ -157,9 +170,12 @@ fn checkRequestedVkInstanceExtensionsSupported(
     defer std.log.debug("Trying to checking if requested vulkan instance extensions are supported OK", .{});
 }
 
+// =VkInstanceLayers===================================================================================================
+
+/// Creates an arraylist of all supported instance layers
 fn getSupportedVkInstanceLayers(
     allocator: std.mem.Allocator,
-) !std.ArrayList([*c]const u8) {
+) !std.ArrayList([*:0]const u8) {
     std.log.debug("Trying to enumerate supported vulkan instance layers...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan instance layers failed", .{});
 
@@ -169,22 +185,30 @@ fn getSupportedVkInstanceLayers(
 
     const layer_properties = try allocator.alloc(c.VkLayerProperties, count);
     defer allocator.free(layer_properties);
-    try handleError(c.vkEnumerateInstanceLayerProperties(&count, @ptrCast(layer_properties)));
+    try handleError(c.vkEnumerateInstanceLayerProperties(&count, layer_properties.ptr));
 
-    var layers = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
+    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
+    errdefer {
+        for (layers.items) |layer| allocator.free(std.mem.span(layer));
+        layers.deinit(allocator);
+    }
+
     for (layer_properties) |layer_property| {
         const name = std.mem.sliceTo(&layer_property.layerName, 0);
         std.log.debug("Support exists for instance layer '{s}'", .{name});
-        try layers.append(allocator, try allocator.dupeZ(u8, name));
+        const layer = try allocator.dupeZ(u8, name);
+        errdefer allocator.free(layer);
+        try layers.append(allocator, layer);
     }
 
     defer std.log.debug("Trying to enumerate supported vulkan instance layers OK", .{});
     return layers;
 }
 
+/// Check if requested layer extensions are supported
 fn checkRequestedVkInstanceLayersSupported(
     allocator: std.mem.Allocator,
-    requestedLayers: std.ArrayList([*c]const u8),
+    requested_layers: []const [*:0]const u8,
 ) !void {
     std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
@@ -195,7 +219,7 @@ fn checkRequestedVkInstanceLayersSupported(
         supported_layers.deinit(allocator);
     }
 
-    for (requestedLayers.items) |requested| {
+    for (requested_layers) |requested| {
         var found = false;
         for (supported_layers.items) |supported| {
             if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
@@ -214,6 +238,9 @@ fn checkRequestedVkInstanceLayersSupported(
     defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
 }
 
+// =VkInstance=========================================================================================================
+
+/// Initialize vulkan instance
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
 ) !c.VkInstance {
@@ -227,13 +254,13 @@ pub fn initVkInstance(
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     try extensions.append(allocator, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    try checkRequestedVkInstanceExtensionsSupported(allocator, extensions);
+    try checkRequestedVkInstanceExtensionsSupported(allocator, extensions.items);
 
     // create our list of requested instance layers
-    var layers = try std.ArrayList([*c]const u8).initCapacity(allocator, 0);
+    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
     try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-    try checkRequestedVkInstanceLayersSupported(allocator, layers);
+    try checkRequestedVkInstanceLayersSupported(allocator, layers.items);
 
     // create the instance
     try handleError(
@@ -248,6 +275,7 @@ pub fn initVkInstance(
 
                 // messages we would like to let through
                 .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | //
+                    c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | //
                     c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | //
                     c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
                 .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | //
@@ -255,6 +283,8 @@ pub fn initVkInstance(
                     c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
 
                 .pfnUserCallback = vkDebugCallback,
+
+                // context for logging
                 .pUserData = null,
             },
 
@@ -273,20 +303,22 @@ pub fn initVkInstance(
             },
 
             // pass our layers
+            .ppEnabledLayerNames = layers.items.ptr,
             .enabledLayerCount = @intCast(layers.items.len),
-            .ppEnabledLayerNames = @ptrCast(layers.items),
 
             // pass our extensions
+            .ppEnabledExtensionNames = extensions.items.ptr,
             .enabledExtensionCount = @intCast(extensions.items.len),
-            .ppEnabledExtensionNames = @ptrCast(extensions.items),
-        }, null, @ptrCast(&vk_instance)),
+        }, null, &vk_instance),
     );
+    errdefer deinitVkInstance(vk_instance);
 
     defer std.log.info("Trying to init vulkan instance OK", .{});
 
     return vk_instance;
 }
 
+/// Deinitialize vulkan instance
 pub fn deinitVkInstance(
     vkInstance: c.VkInstance,
 ) void {
@@ -297,6 +329,7 @@ pub fn deinitVkInstance(
 
 // =VkSurface==========================================================================================================
 
+/// Initialize vulkan surface from SDL3
 pub fn initVkSurface(
     window: *c.SDL_Window,
     vk_instance: c.VkInstance,
@@ -307,11 +340,13 @@ pub fn initVkSurface(
     errdefer std.log.err("Trying to init vulkan surface failed", .{});
 
     try handleError(c.SDL_Vulkan_CreateSurface(window, vk_instance, null, &vk_surface));
+    errdefer deinitVkSurface(vk_surface);
 
     defer std.log.info("Trying to init vulkan surface OK", .{});
     return vk_surface;
 }
 
+/// Deinitialize vulkan surface from SDL3
 pub fn deinitVkSurface(
     vk_instance: c.VkInstance,
     vk_surface: c.VkSurfaceKHR,
@@ -323,237 +358,7 @@ pub fn deinitVkSurface(
 
 // =VkPhysicalDevice===================================================================================================
 
-pub fn getVkExtent(
-    window: *c.SDL_Window,
-    capabilities: c.VkSurfaceCapabilitiesKHR,
-) !c.VkExtent2D {
-    std.log.debug("Trying to get extent...", .{});
-    errdefer std.log.err("Trying to get extent failed", .{});
-
-    if (capabilities.currentExtent.width != std.math.maxInt(u32) or //
-        capabilities.currentExtent.height != std.math.maxInt(u32))
-    {
-        return capabilities.currentExtent;
-    }
-
-    var w: c_int = 0;
-    var h: c_int = 0;
-    try handleError(c.SDL_GetWindowSizeInPixels(window, &w, &h));
-
-    const w32: u32 = @intCast(if (w < 0) 0 else w);
-    const h32: u32 = @intCast(if (h < 0) 0 else h);
-
-    // clamp to boundaries defined by the swapchain
-    defer std.log.debug("Trying to get extent OK", .{});
-    return .{
-        .width = std.math.clamp(
-            w32,
-            capabilities.minImageExtent.width,
-            capabilities.maxImageExtent.width,
-        ),
-        .height = std.math.clamp(
-            h32,
-            capabilities.minImageExtent.height,
-            capabilities.maxImageExtent.height,
-        ),
-    };
-}
-
-fn selectSupportedVkFormats(
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkFormats: []c.VkFormat,
-    vkImageTiling: c.VkImageTiling,
-    vkFormatFeatureFlags: c.VkFormatFeatureFlags,
-) !c.VkFormat {
-    for (vkFormats) |vkFormat| {
-        var vkFormatProperties: c.VkFormatProperties = undefined;
-        c.vkGetPhysicalDeviceFormatProperties(vkPhysicalDevice, vkFormat, &vkFormatProperties);
-
-        if (vkImageTiling == c.VK_IMAGE_TILING_LINEAR and //
-            (vkFormatProperties.linearTilingFeatures & vkFormatFeatureFlags) == vkFormatFeatureFlags)
-        {
-            return vkFormat;
-        }
-
-        if (vkImageTiling == c.VK_IMAGE_TILING_OPTIMAL and //
-            (vkFormatProperties.optimalTilingFeatures & vkFormatFeatureFlags) == vkFormatFeatureFlags)
-        {
-            return vkFormat;
-        }
-    }
-
-    return error.VkErrorFormatUnsupported;
-}
-
-pub fn getPreferredVkDepthFormat(
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !c.VkFormat {
-    return try selectSupportedVkFormats(
-        vkPhysicalDevice,
-        @ptrCast(@constCast(&[_]c.VkFormat{
-            c.VK_FORMAT_D32_SFLOAT,
-            c.VK_FORMAT_D32_SFLOAT_S8_UINT,
-            c.VK_FORMAT_D24_UNORM_S8_UINT,
-        })),
-        c.VK_IMAGE_TILING_OPTIMAL,
-        c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
-    );
-}
-
-pub fn getPreferredVkSurfaceFormat(
-    allocator: std.mem.Allocator,
-    vk_physical_device: c.VkPhysicalDevice,
-    surface: c.VkSurfaceKHR,
-) !c.VkSurfaceFormatKHR {
-    var vk_surface_format: c.VkSurfaceFormatKHR = undefined;
-
-    std.log.debug("Trying to get preferred surface format...", .{});
-    errdefer std.log.err("Trying to get preferred surface format failed", .{});
-
-    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
-        allocator,
-        vk_physical_device,
-        surface,
-    );
-
-    defer allocator.free(supportedSurfaceFormats);
-
-    vk_surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
-
-    defer std.log.debug("Trying to get preferred surface format OK", .{});
-
-    return vk_surface_format;
-}
-
-pub fn getPreferredVkPresentMode(
-    allocator: std.mem.Allocator,
-    vk_physical_device: c.VkPhysicalDevice,
-    surface: c.VkSurfaceKHR,
-) !c.VkPresentModeKHR {
-    var vk_present_mode: c.VkPresentModeKHR = undefined;
-
-    std.log.debug("Trying to get preferred surface format...", .{});
-    errdefer std.log.err("Trying to get preferred surface format failed", .{});
-
-    const supportedPresentModes = try getSupportedVkDeviceSurfacePresentModes(
-        allocator,
-        vk_physical_device,
-        surface,
-    );
-
-    defer allocator.free(supportedPresentModes);
-
-    vk_present_mode = selectPreferredSurfacePresentMode(supportedPresentModes);
-
-    defer std.log.debug("Trying to get preferred surface format OK", .{});
-
-    return vk_present_mode;
-}
-
-pub fn getPhysicalDeviceSurfaceCapabilities(
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkSurface: c.VkSurfaceKHR,
-) !c.VkSurfaceCapabilitiesKHR {
-    std.log.debug("Trying to get surface capabilities...", .{});
-    errdefer std.log.err("Trying to get surface capabilities failed", .{});
-
-    var vkSurfaceCapabilities = c.VkSurfaceCapabilitiesKHR{};
-    try handleError(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-        vkPhysicalDevice,
-        vkSurface,
-        &vkSurfaceCapabilities,
-    ));
-
-    defer std.log.debug("Trying to get surface capabilities OK", .{});
-    return vkSurfaceCapabilities;
-}
-
-fn getQueueFamilyProperties(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) ![]c.VkQueueFamilyProperties {
-    std.log.debug("Trying to get all queue family properties...", .{});
-    errdefer std.log.err("Trying to get all queue family properties failed", .{});
-
-    var count: u32 = 0;
-    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, null);
-    const queueFamilyProperties = try allocator.alloc(c.VkQueueFamilyProperties, count);
-    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, @ptrCast(queueFamilyProperties));
-
-    defer std.log.debug("Trying to get all queue family properties OK", .{});
-    return queueFamilyProperties;
-}
-
-pub fn findGraphicsQueueIndex(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !u32 {
-    std.log.debug("Trying to get graphics queue index...", .{});
-    errdefer std.log.err("Trying to get graphics queue index failed", .{});
-
-    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
-    defer allocator.free(queueFamilyProperties);
-
-    var graphicsQueueIndex: u32 = 0;
-    var graphicsQueueFound = false;
-    for (0..queueFamilyProperties.len) |i| {
-        if (queueFamilyProperties[i].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
-            graphicsQueueIndex = @intCast(i);
-            graphicsQueueFound = true;
-            break;
-        }
-    }
-
-    if (!graphicsQueueFound) {
-        std.log.err("Could not find queue with graphics bit set", .{});
-        return error.VkQueueNotFound;
-    }
-
-    std.log.debug("Using graphics queue index '{}'", .{graphicsQueueIndex});
-
-    defer std.log.debug("Trying to get graphics queue index OK", .{});
-    return graphicsQueueIndex;
-}
-
-pub fn findPresentQueueIndex(
-    allocator: std.mem.Allocator,
-    vkSurface: c.VkSurfaceKHR,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !u32 {
-    std.log.debug("Trying to get present queue index...", .{});
-    errdefer std.log.err("Trying to get present queue index failed", .{});
-
-    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
-    defer allocator.free(queueFamilyProperties);
-
-    var presentQueueIndex: u32 = 0;
-    var presentQueueFound = false;
-    for (0..queueFamilyProperties.len) |j| {
-        var vkBoolHasPresentSupport: c.VkBool32 = 0;
-        try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
-            vkPhysicalDevice,
-            @intCast(j),
-            vkSurface,
-            &vkBoolHasPresentSupport,
-        ));
-        if (vkBoolHasPresentSupport > 0) {
-            presentQueueIndex = @intCast(j);
-            presentQueueFound = true;
-            break;
-        }
-    }
-
-    if (!presentQueueFound) {
-        std.log.err("Could not find queue with present bit set", .{});
-        return error.VkQueueNotFound;
-    }
-
-    std.log.debug("Using present queue index '{}'", .{presentQueueIndex});
-
-    defer std.log.debug("Trying to get present queue index OK", .{});
-    return presentQueueIndex;
-}
-
+/// Initialize a vulkan physical device
 pub fn initVkPhysicalDevice(
     allocator: std.mem.Allocator,
     vk_instance: c.VkInstance,
@@ -570,7 +375,7 @@ pub fn initVkPhysicalDevice(
 
     const physical_devices = try allocator.alloc(c.VkPhysicalDevice, count);
     defer allocator.free(physical_devices);
-    try handleError(c.vkEnumeratePhysicalDevices(vk_instance, &count, @ptrCast(physical_devices)));
+    try handleError(c.vkEnumeratePhysicalDevices(vk_instance, &count, physical_devices.ptr));
 
     const physical_deviceScores = try allocator.alloc(usize, count);
     defer allocator.free(physical_deviceScores);
@@ -668,6 +473,7 @@ pub fn initVkPhysicalDevice(
                 vk_surface,
                 &vkBoolHasPresentSupport,
             ));
+
             if (vkBoolHasPresentSupport > 0) {
                 hasPresentSupport = true;
                 break;
@@ -697,14 +503,214 @@ pub fn initVkPhysicalDevice(
     }
 
     vk_physical_device = physical_devices[highestScoreIndex];
+
+    // Small snippet just for printing
     var properties = c.VkPhysicalDeviceProperties{};
     c.vkGetPhysicalDeviceProperties(physical_devices[highestScoreIndex], &properties);
-
     std.log.info("Selecting physical device with name {s}", .{properties.deviceName});
 
     defer std.log.info("Trying to select vulkan physical device OK", .{});
 
     return vk_physical_device;
+}
+
+// =VkSurfaceCapabilities==============================================================================================
+
+/// Gets a vulkan extent containing the surface dimensions from an SDL window
+pub fn getVkExtentFromSDLWindow(
+    window: *c.SDL_Window,
+    capabilities: c.VkSurfaceCapabilitiesKHR,
+) !c.VkExtent2D {
+    std.log.debug("Trying to get extent...", .{});
+    errdefer std.log.err("Trying to get extent failed", .{});
+
+    if (capabilities.currentExtent.width != std.math.maxInt(u32) or //
+        capabilities.currentExtent.height != std.math.maxInt(u32))
+    {
+        return capabilities.currentExtent;
+    }
+
+    var w: c_int = 0;
+    var h: c_int = 0;
+    try handleError(c.SDL_GetWindowSizeInPixels(window, &w, &h));
+
+    const w32: u32 = @intCast(if (w < 0) 0 else w);
+    const h32: u32 = @intCast(if (h < 0) 0 else h);
+
+    // clamp to boundaries defined by the swapchain
+    const extent = c.VkExtent2D{
+        .width = std.math.clamp(
+            w32,
+            capabilities.minImageExtent.width,
+            capabilities.maxImageExtent.width,
+        ),
+        .height = std.math.clamp(
+            h32,
+            capabilities.minImageExtent.height,
+            capabilities.maxImageExtent.height,
+        ),
+    };
+
+    std.log.debug("Created extent of size ({} x {})", .{ extent.width, extent.height });
+
+    defer std.log.debug("Trying to get extent OK", .{});
+
+    return extent;
+}
+
+/// Gets the surface capabilities of our physical device given the surface
+pub fn getPhysicalDeviceSurfaceCapabilities(
+    vkPhysicalDevice: c.VkPhysicalDevice,
+    vkSurface: c.VkSurfaceKHR,
+) !c.VkSurfaceCapabilitiesKHR {
+    std.log.debug("Trying to get surface capabilities...", .{});
+    errdefer std.log.err("Trying to get surface capabilities failed", .{});
+
+    var vkSurfaceCapabilities = c.VkSurfaceCapabilitiesKHR{};
+    try handleError(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        vkPhysicalDevice,
+        vkSurface,
+        &vkSurfaceCapabilities,
+    ));
+
+    defer std.log.debug("Trying to get surface capabilities OK", .{});
+    return vkSurfaceCapabilities;
+}
+
+// =VkPreferences======================================================================================================
+
+pub fn getPreferredVkSurfaceFormat(
+    allocator: std.mem.Allocator,
+    vk_physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkSurfaceFormatKHR {
+    var vk_surface_format: c.VkSurfaceFormatKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
+        allocator,
+        vk_physical_device,
+        surface,
+    );
+    defer allocator.free(supportedSurfaceFormats);
+
+    vk_surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return vk_surface_format;
+}
+
+pub fn getPreferredVkPresentMode(
+    allocator: std.mem.Allocator,
+    vk_physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkPresentModeKHR {
+    var vk_present_mode: c.VkPresentModeKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supportedPresentModes = try getSupportedVkDeviceSurfacePresentModes(
+        allocator,
+        vk_physical_device,
+        surface,
+    );
+    defer allocator.free(supportedPresentModes);
+
+    vk_present_mode = selectPreferredSurfacePresentMode(supportedPresentModes);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return vk_present_mode;
+}
+
+fn getQueueFamilyProperties(
+    allocator: std.mem.Allocator,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+) ![]c.VkQueueFamilyProperties {
+    std.log.debug("Trying to get all queue family properties...", .{});
+    errdefer std.log.err("Trying to get all queue family properties failed", .{});
+
+    var count: u32 = 0;
+    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, null);
+    const queueFamilyProperties = try allocator.alloc(c.VkQueueFamilyProperties, count);
+    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, queueFamilyProperties.ptr);
+
+    defer std.log.debug("Trying to get all queue family properties OK", .{});
+    return queueFamilyProperties;
+}
+
+pub fn findGraphicsQueueIndex(
+    allocator: std.mem.Allocator,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+) !u32 {
+    std.log.debug("Trying to get graphics queue index...", .{});
+    errdefer std.log.err("Trying to get graphics queue index failed", .{});
+
+    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
+    defer allocator.free(queueFamilyProperties);
+
+    var graphicsQueueIndex: u32 = 0;
+    var graphicsQueueFound = false;
+    for (0..queueFamilyProperties.len) |i| {
+        if (queueFamilyProperties[i].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
+            graphicsQueueIndex = @intCast(i);
+            graphicsQueueFound = true;
+            break;
+        }
+    }
+
+    if (!graphicsQueueFound) {
+        std.log.err("Could not find queue with graphics bit set", .{});
+        return error.VkQueueNotFound;
+    }
+
+    std.log.debug("Using graphics queue index '{}'", .{graphicsQueueIndex});
+
+    defer std.log.debug("Trying to get graphics queue index OK", .{});
+    return graphicsQueueIndex;
+}
+
+pub fn findPresentQueueIndex(
+    allocator: std.mem.Allocator,
+    vkSurface: c.VkSurfaceKHR,
+    vkPhysicalDevice: c.VkPhysicalDevice,
+) !u32 {
+    std.log.debug("Trying to get present queue index...", .{});
+    errdefer std.log.err("Trying to get present queue index failed", .{});
+
+    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
+    defer allocator.free(queueFamilyProperties);
+
+    var presentQueueIndex: u32 = 0;
+    var presentQueueFound = false;
+    for (0..queueFamilyProperties.len) |j| {
+        var vkBoolHasPresentSupport: c.VkBool32 = 0;
+        try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
+            vkPhysicalDevice,
+            @intCast(j),
+            vkSurface,
+            &vkBoolHasPresentSupport,
+        ));
+        if (vkBoolHasPresentSupport > 0) {
+            presentQueueIndex = @intCast(j);
+            presentQueueFound = true;
+            break;
+        }
+    }
+
+    if (!presentQueueFound) {
+        std.log.err("Could not find queue with present bit set", .{});
+        return error.VkQueueNotFound;
+    }
+
+    std.log.debug("Using present queue index '{}'", .{presentQueueIndex});
+
+    defer std.log.debug("Trying to get present queue index OK", .{});
+    return presentQueueIndex;
 }
 
 // =VkDevice===========================================================================================================
@@ -750,7 +756,7 @@ fn getSupportedVkDeviceSurfacePresentModes(
         vkPhysicalDevice,
         vkSurface,
         &count,
-        @ptrCast(surfacePresentModes),
+        @ptrCast(surfacePresentModes.ptr),
     ));
 
     defer std.log.info("Trying to enumerate supported vulkan device surface present modes OK", .{});
@@ -770,7 +776,7 @@ fn getSupportedVkDeviceSurfaceFormats(
     std.log.debug("Vulkan reports '{}' device surfaces formats in total", .{count});
 
     const surfaceFormats = try allocator.alloc(c.VkSurfaceFormatKHR, count);
-    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(vkPhysicalDevice, vkSurface, &count, @ptrCast(surfaceFormats)));
+    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(vkPhysicalDevice, vkSurface, &count, surfaceFormats.ptr));
 
     defer std.log.debug("Trying to enumerate supported vulkan device surface formats OK", .{});
     return surfaceFormats;
@@ -813,7 +819,7 @@ fn getSupportedVkDeviceLayers(
 
     const layerProperties = try allocator.alloc(c.VkLayerProperties, count);
     defer allocator.free(layerProperties);
-    try handleError(c.vkEnumerateDeviceLayerProperties(vkPhysicalDevice, &count, @ptrCast(layerProperties)));
+    try handleError(c.vkEnumerateDeviceLayerProperties(vkPhysicalDevice, &count, layerProperties.ptr));
 
     var layers = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
     for (layerProperties) |layerProperty| {
@@ -843,12 +849,12 @@ fn getSupportedVkDeviceExtensions(
         vkPhysicalDevice,
         null,
         &count,
-        @ptrCast(extensionProperties),
+        extensionProperties.ptr,
     ));
 
     var extensions = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
-    for (extensionProperties) |extensionProperty| {
-        const name = std.mem.sliceTo(&extensionProperty.extensionName, 0);
+    for (extensionProperties) |extension_property| {
+        const name = std.mem.sliceTo(&extension_property.extensionName, 0);
         std.log.debug("Support exists for device extension '{s}'", .{name});
         try extensions.append(allocator, try allocator.dupeZ(u8, name));
     }
@@ -860,7 +866,7 @@ fn getSupportedVkDeviceExtensions(
 fn checkRequestedVkDeviceExtensionsSupported(
     allocator: std.mem.Allocator,
     vkPhysicalDevice: c.VkPhysicalDevice,
-    requestedExtensions: std.ArrayList([*c]const u8),
+    requested_extensions: std.ArrayList([*c]const u8),
 ) !void {
     std.log.debug("Trying to checking if requested vulkan device extensions are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan device extensions are supported failed", .{});
@@ -872,7 +878,7 @@ fn checkRequestedVkDeviceExtensionsSupported(
         supportedExtensions.deinit(allocator);
     }
 
-    for (requestedExtensions.items) |requested| {
+    for (requested_extensions.items) |requested| {
         var found = false;
         for (supportedExtensions.items) |supported| {
             if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
@@ -894,7 +900,7 @@ fn checkRequestedVkDeviceExtensionsSupported(
 fn checkRequestedVkDeviceLayersSupported(
     allocator: std.mem.Allocator,
     vkPhysicalDevice: c.VkPhysicalDevice,
-    requestedLayers: std.ArrayList([*c]const u8),
+    requested_layers: std.ArrayList([*c]const u8),
 ) !void {
     std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
@@ -906,7 +912,7 @@ fn checkRequestedVkDeviceLayersSupported(
         supportedLayers.deinit(allocator);
     }
 
-    for (requestedLayers.items) |requested| {
+    for (requested_layers.items) |requested| {
         var found = false;
         for (supportedLayers.items) |supported| {
             if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
@@ -983,15 +989,15 @@ pub fn initVkDevice(
 
         // specify queue families to create, where we can later retrieve a handle for
         .queueCreateInfoCount = @intCast(queueFamilyCreateInfos.items.len),
-        .pQueueCreateInfos = @ptrCast(queueFamilyCreateInfos.items),
+        .pQueueCreateInfos = queueFamilyCreateInfos.items.ptr,
 
         // layers to enable
         .enabledLayerCount = @intCast(layers.items.len),
-        .ppEnabledLayerNames = @ptrCast(layers.items),
+        .ppEnabledLayerNames = layers.items.ptr,
 
         // extensions to enable
         .enabledExtensionCount = @intCast(extensions.items.len),
-        .ppEnabledExtensionNames = @ptrCast(extensions.items),
+        .ppEnabledExtensionNames = extensions.items.ptr,
 
         // features to enable
         .pEnabledFeatures = &c.VkPhysicalDeviceFeatures{
@@ -1098,7 +1104,7 @@ pub fn initVkImages(
     var count: u32 = 0;
     try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, null));
     const images = try allocator.alloc(c.VkImage, count);
-    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, @ptrCast(images)));
+    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, images.ptr));
 
     std.log.info("Acquired {} images", .{count});
 
@@ -1627,7 +1633,7 @@ pub fn initCommandBuffers(
             .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = @intCast(bufferCount),
         },
-        @ptrCast(vkCommandBuffers),
+        vkCommandBuffers.ptr,
     ));
 
     defer std.log.info("Trying to init command buffers OK", .{});

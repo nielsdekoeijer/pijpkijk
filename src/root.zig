@@ -30,7 +30,6 @@ pub const App = struct {
     surface_format: c.VkSurfaceFormatKHR,
     swap_extent: c.VkExtent2D,
     present_mode: c.VkPresentModeKHR,
-    depth_format: c.VkFormat,
     device: c.VkDevice,
     swapchain: c.VkSwapchainKHR,
     images: []c.VkImage,
@@ -88,10 +87,9 @@ pub const App = struct {
         self.graphics_queue_index = try util.findGraphicsQueueIndex(allocator, self.physical_device);
         self.present_queue_index = try util.findPresentQueueIndex(allocator, self.surface, self.physical_device);
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = try util.getVkExtent(self.window, self.surface_capabilities);
+        self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
         self.surface_format = try util.getPreferredVkSurfaceFormat(allocator, self.physical_device, self.surface);
         self.present_mode = try util.getPreferredVkPresentMode(allocator, self.physical_device, self.surface);
-        self.depth_format = try util.getPreferredVkDepthFormat(self.physical_device);
 
         // =AqcuireVkDevice============================================================================================
         self.device = try util.initVkDevice(
@@ -449,7 +447,7 @@ pub const App = struct {
         util.deinitVkSwapchain(self.device, self.swapchain);
 
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = try util.getVkExtent(self.window, self.surface_capabilities);
+        self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
 
         self.swapchain = try util.initVkSwapchain(self.device, self.surface, self.surface_capabilities, self.surface_format, self.swap_extent, self.present_mode, self.graphics_queue_index, self.present_queue_index);
         self.images = try util.initVkImages(self.allocator, self.device, self.swapchain);
