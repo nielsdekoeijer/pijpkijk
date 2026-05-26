@@ -18,7 +18,7 @@ pub const Vec3 = extern struct {
     z: f32,
 };
 
-pub const Uniform = struct {
+pub const Uniform = extern struct {
     screen_size: [2]f32,
     cube_pos: [2]f32, 
 };

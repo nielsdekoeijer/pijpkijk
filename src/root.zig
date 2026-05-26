@@ -54,7 +54,7 @@ pub const App = struct {
     present_queue: c.VkQueue,
 
     // TEMP
-    cube_pos: [2]f32 = .{ 200.0, 200.0 },
+    cube_pos: [2]f32,
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -216,6 +216,7 @@ pub const App = struct {
         );
         errdefer util.deinitVkDescriptorSets(allocator, self.descrptor_sets);
 
+        self.cube_pos = [_]f32{ 300, 300 };
         return self;
     }
 

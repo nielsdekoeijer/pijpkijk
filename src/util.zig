@@ -1408,6 +1408,8 @@ pub fn initVkGraphicsPipeline(
     errdefer std.log.info("Trying to init graphics pipeline failed", .{});
 
     //
+    const vertex_bind = Vertex.getVkBindingDiscription();
+    const vertex_attr = Vertex.getVkAttributeDiscription();
     try handleError(c.vkCreateGraphicsPipelines(
         device,
         null,
@@ -1441,10 +1443,10 @@ pub fn initVkGraphicsPipeline(
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .vertexBindingDescriptionCount = Vertex.getVkBindingDiscription().len,
-                .pVertexBindingDescriptions = &Vertex.getVkBindingDiscription(),
-                .vertexAttributeDescriptionCount = Vertex.getVkAttributeDiscription().len,
-                .pVertexAttributeDescriptions = &Vertex.getVkAttributeDiscription(),
+                .vertexBindingDescriptionCount = vertex_bind.len,
+                .pVertexBindingDescriptions = &vertex_bind,
+                .vertexAttributeDescriptionCount = vertex_attr.len,
+                .pVertexAttributeDescriptions = &vertex_attr,
             },
             .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
