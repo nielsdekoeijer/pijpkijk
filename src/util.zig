@@ -244,7 +244,7 @@ fn checkRequestedVkInstanceLayersSupported(
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
 ) !c.VkInstance {
-    var vk_instance: c.VkInstance = undefined;
+    var instance: c.VkInstance = undefined;
 
     std.log.info("Trying to init vulkan instance...", .{});
     errdefer std.log.err("Trying to init vulkan instance failed", .{});
@@ -309,20 +309,20 @@ pub fn initVkInstance(
             // pass our extensions
             .ppEnabledExtensionNames = extensions.items.ptr,
             .enabledExtensionCount = @intCast(extensions.items.len),
-        }, null, &vk_instance),
+        }, null, &instance),
     );
-    errdefer deinitVkInstance(vk_instance);
+    errdefer deinitVkInstance(instance);
 
     defer std.log.info("Trying to init vulkan instance OK", .{});
 
-    return vk_instance;
+    return instance;
 }
 
 /// Deinitialize vulkan instance
 pub fn deinitVkInstance(
-    vkInstance: c.VkInstance,
+    instance: c.VkInstance,
 ) void {
-    c.vkDestroyInstance(vkInstance, null);
+    c.vkDestroyInstance(instance, null);
 
     defer std.log.info("Deinit vulkan instance OK", .{});
 }
@@ -332,26 +332,26 @@ pub fn deinitVkInstance(
 /// Initialize vulkan surface from SDL3
 pub fn initVkSurface(
     window: *c.SDL_Window,
-    vk_instance: c.VkInstance,
+    instance: c.VkInstance,
 ) !c.VkSurfaceKHR {
-    var vk_surface: c.VkSurfaceKHR = undefined;
+    var surface: c.VkSurfaceKHR = undefined;
 
     std.log.info("Trying to init vulkan surface...", .{});
     errdefer std.log.err("Trying to init vulkan surface failed", .{});
 
-    try handleError(c.SDL_Vulkan_CreateSurface(window, vk_instance, null, &vk_surface));
-    errdefer deinitVkSurface(vk_surface);
+    try handleError(c.SDL_Vulkan_CreateSurface(window, instance, null, &surface));
+    errdefer deinitVkSurface(surface);
 
     defer std.log.info("Trying to init vulkan surface OK", .{});
-    return vk_surface;
+    return surface;
 }
 
 /// Deinitialize vulkan surface from SDL3
 pub fn deinitVkSurface(
-    vk_instance: c.VkInstance,
-    vk_surface: c.VkSurfaceKHR,
+    instance: c.VkInstance,
+    surface: c.VkSurfaceKHR,
 ) void {
-    c.SDL_Vulkan_DestroySurface(vk_instance, vk_surface, null);
+    c.SDL_Vulkan_DestroySurface(instance, surface, null);
 
     defer std.log.info("Deinit vulkan surface OK", .{});
 }
@@ -361,21 +361,21 @@ pub fn deinitVkSurface(
 /// Initialize a vulkan physical device
 pub fn initVkPhysicalDevice(
     allocator: std.mem.Allocator,
-    vk_instance: c.VkInstance,
-    vk_surface: c.VkSurfaceKHR,
+    instance: c.VkInstance,
+    surface: c.VkSurfaceKHR,
 ) !c.VkPhysicalDevice {
-    var vk_physical_device: c.VkPhysicalDevice = undefined;
+    var physical_device: c.VkPhysicalDevice = undefined;
 
     std.log.info("Trying to select vulkan physical device...", .{});
     errdefer std.log.err("Trying to select vulkan physical device failed", .{});
 
     var count: u32 = 0;
-    try handleError(c.vkEnumeratePhysicalDevices(vk_instance, &count, null));
+    try handleError(c.vkEnumeratePhysicalDevices(instance, &count, null));
     std.log.debug("Vulkan reports '{}' physical devices in total", .{count});
 
     const physical_devices = try allocator.alloc(c.VkPhysicalDevice, count);
     defer allocator.free(physical_devices);
-    try handleError(c.vkEnumeratePhysicalDevices(vk_instance, &count, physical_devices.ptr));
+    try handleError(c.vkEnumeratePhysicalDevices(instance, &count, physical_devices.ptr));
 
     const physical_deviceScores = try allocator.alloc(usize, count);
     defer allocator.free(physical_deviceScores);
@@ -444,13 +444,13 @@ pub fn initVkPhysicalDevice(
             },
         }
 
-        const queueFamilyProperties = try getQueueFamilyProperties(allocator, physical_devices[i]);
-        defer allocator.free(queueFamilyProperties);
+        const queue_family_properties = try getQueueFamilyProperties(allocator, physical_devices[i]);
+        defer allocator.free(queue_family_properties);
 
         // check for graphics bit
         var hasGraphicsBit = false;
-        for (0..queueFamilyProperties.len) |j| {
-            if (queueFamilyProperties[j].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
+        for (0..queue_family_properties.len) |j| {
+            if (queue_family_properties[j].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
                 hasGraphicsBit = true;
                 break;
             }
@@ -465,12 +465,12 @@ pub fn initVkPhysicalDevice(
 
         // check if the device can present on our surface
         var hasPresentSupport = false;
-        for (0..queueFamilyProperties.len) |j| {
+        for (0..queue_family_properties.len) |j| {
             var vkBoolHasPresentSupport: c.VkBool32 = 0;
             try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
                 physical_devices[i],
                 @intCast(j),
-                vk_surface,
+                surface,
                 &vkBoolHasPresentSupport,
             ));
 
@@ -502,7 +502,7 @@ pub fn initVkPhysicalDevice(
         return error.VkNoSuitablePhysicalDevices;
     }
 
-    vk_physical_device = physical_devices[highestScoreIndex];
+    physical_device = physical_devices[highestScoreIndex];
 
     // Small snippet just for printing
     var properties = c.VkPhysicalDeviceProperties{};
@@ -511,7 +511,7 @@ pub fn initVkPhysicalDevice(
 
     defer std.log.info("Trying to select vulkan physical device OK", .{});
 
-    return vk_physical_device;
+    return physical_device;
 }
 
 // =VkSurfaceCapabilities==============================================================================================
@@ -560,228 +560,48 @@ pub fn getVkExtentFromSDLWindow(
 
 /// Gets the surface capabilities of our physical device given the surface
 pub fn getPhysicalDeviceSurfaceCapabilities(
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkSurface: c.VkSurfaceKHR,
+    physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
 ) !c.VkSurfaceCapabilitiesKHR {
     std.log.debug("Trying to get surface capabilities...", .{});
     errdefer std.log.err("Trying to get surface capabilities failed", .{});
 
-    var vkSurfaceCapabilities = c.VkSurfaceCapabilitiesKHR{};
+    var surfaceCapabilities = c.VkSurfaceCapabilitiesKHR{};
     try handleError(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-        vkPhysicalDevice,
-        vkSurface,
-        &vkSurfaceCapabilities,
+        physical_device,
+        surface,
+        &surfaceCapabilities,
     ));
 
     defer std.log.debug("Trying to get surface capabilities OK", .{});
-    return vkSurfaceCapabilities;
+    return surfaceCapabilities;
 }
 
-// =VkPreferences======================================================================================================
+// =VkSurfaceFormat====================================================================================================
+// The Surface Format (VkSurfaceFormatKHR) dictates exactly how color data is stored in memory and how the monitor
+// should interpret that data.
 
-pub fn getPreferredVkSurfaceFormat(
-    allocator: std.mem.Allocator,
-    vk_physical_device: c.VkPhysicalDevice,
-    surface: c.VkSurfaceKHR,
-) !c.VkSurfaceFormatKHR {
-    var vk_surface_format: c.VkSurfaceFormatKHR = undefined;
-
-    std.log.debug("Trying to get preferred surface format...", .{});
-    errdefer std.log.err("Trying to get preferred surface format failed", .{});
-
-    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
-        allocator,
-        vk_physical_device,
-        surface,
-    );
-    defer allocator.free(supportedSurfaceFormats);
-
-    vk_surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
-
-    defer std.log.debug("Trying to get preferred surface format OK", .{});
-
-    return vk_surface_format;
-}
-
-pub fn getPreferredVkPresentMode(
-    allocator: std.mem.Allocator,
-    vk_physical_device: c.VkPhysicalDevice,
-    surface: c.VkSurfaceKHR,
-) !c.VkPresentModeKHR {
-    var vk_present_mode: c.VkPresentModeKHR = undefined;
-
-    std.log.debug("Trying to get preferred surface format...", .{});
-    errdefer std.log.err("Trying to get preferred surface format failed", .{});
-
-    const supportedPresentModes = try getSupportedVkDeviceSurfacePresentModes(
-        allocator,
-        vk_physical_device,
-        surface,
-    );
-    defer allocator.free(supportedPresentModes);
-
-    vk_present_mode = selectPreferredSurfacePresentMode(supportedPresentModes);
-
-    defer std.log.debug("Trying to get preferred surface format OK", .{});
-
-    return vk_present_mode;
-}
-
-fn getQueueFamilyProperties(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) ![]c.VkQueueFamilyProperties {
-    std.log.debug("Trying to get all queue family properties...", .{});
-    errdefer std.log.err("Trying to get all queue family properties failed", .{});
-
-    var count: u32 = 0;
-    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, null);
-    const queueFamilyProperties = try allocator.alloc(c.VkQueueFamilyProperties, count);
-    c.vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, &count, queueFamilyProperties.ptr);
-
-    defer std.log.debug("Trying to get all queue family properties OK", .{});
-    return queueFamilyProperties;
-}
-
-pub fn findGraphicsQueueIndex(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !u32 {
-    std.log.debug("Trying to get graphics queue index...", .{});
-    errdefer std.log.err("Trying to get graphics queue index failed", .{});
-
-    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
-    defer allocator.free(queueFamilyProperties);
-
-    var graphicsQueueIndex: u32 = 0;
-    var graphicsQueueFound = false;
-    for (0..queueFamilyProperties.len) |i| {
-        if (queueFamilyProperties[i].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
-            graphicsQueueIndex = @intCast(i);
-            graphicsQueueFound = true;
-            break;
-        }
-    }
-
-    if (!graphicsQueueFound) {
-        std.log.err("Could not find queue with graphics bit set", .{});
-        return error.VkQueueNotFound;
-    }
-
-    std.log.debug("Using graphics queue index '{}'", .{graphicsQueueIndex});
-
-    defer std.log.debug("Trying to get graphics queue index OK", .{});
-    return graphicsQueueIndex;
-}
-
-pub fn findPresentQueueIndex(
-    allocator: std.mem.Allocator,
-    vkSurface: c.VkSurfaceKHR,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !u32 {
-    std.log.debug("Trying to get present queue index...", .{});
-    errdefer std.log.err("Trying to get present queue index failed", .{});
-
-    const queueFamilyProperties = try getQueueFamilyProperties(allocator, vkPhysicalDevice);
-    defer allocator.free(queueFamilyProperties);
-
-    var presentQueueIndex: u32 = 0;
-    var presentQueueFound = false;
-    for (0..queueFamilyProperties.len) |j| {
-        var vkBoolHasPresentSupport: c.VkBool32 = 0;
-        try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
-            vkPhysicalDevice,
-            @intCast(j),
-            vkSurface,
-            &vkBoolHasPresentSupport,
-        ));
-        if (vkBoolHasPresentSupport > 0) {
-            presentQueueIndex = @intCast(j);
-            presentQueueFound = true;
-            break;
-        }
-    }
-
-    if (!presentQueueFound) {
-        std.log.err("Could not find queue with present bit set", .{});
-        return error.VkQueueNotFound;
-    }
-
-    std.log.debug("Using present queue index '{}'", .{presentQueueIndex});
-
-    defer std.log.debug("Trying to get present queue index OK", .{});
-    return presentQueueIndex;
-}
-
-// =VkDevice===========================================================================================================
-
-fn selectPreferredSurfacePresentMode(
-    supportedPresentModes: []c.VkSurfacePresentModeKHR,
-) c.VkPresentModeKHR {
-    std.log.info("Trying to select vulkan swapchain present mode...", .{});
-    errdefer std.log.err("Trying to select vulkan swapchain present mode failed", .{});
-
-    var selectedMode: c.VkPresentModeKHR = undefined;
-    for (supportedPresentModes) |mode| {
-        if (mode.presentMode == @as(c.VkPresentModeKHR, @intCast(c.VK_PRESENT_MODE_MAILBOX_KHR))) {
-            defer std.log.debug("Selecting present mode 'VK_PRESENT_MODE_MAILBOX_KHR'", .{});
-            selectedMode = mode.presentMode;
-
-            defer std.log.info("Trying to select vulkan swapchain present mode OK", .{});
-            return selectedMode;
-        }
-    }
-
-    selectedMode = c.VK_PRESENT_MODE_FIFO_KHR;
-    defer std.log.debug("Selecting present mode 'VK_PRESENT_MODE_FIFO_KHR'", .{});
-
-    defer std.log.info("Trying to select vulkan swapchain present mode OK", .{});
-    return selectedMode;
-}
-
-fn getSupportedVkDeviceSurfacePresentModes(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkSurface: c.VkSurfaceKHR,
-) ![]c.VkSurfacePresentModeKHR {
-    std.log.info("Trying to enumerate supported vulkan device surface present modes...", .{});
-    errdefer std.log.err("Trying to enumerate supported vulkan device surface present modes failed", .{});
-
-    var count: u32 = 0;
-    try handleError(c.vkGetPhysicalDeviceSurfacePresentModesKHR(vkPhysicalDevice, vkSurface, &count, null));
-    std.log.debug("Vulkan reports '{}' device surfaces present modes in total", .{count});
-
-    const surfacePresentModes = try allocator.alloc(c.VkSurfacePresentModeKHR, count);
-    try handleError(c.vkGetPhysicalDeviceSurfacePresentModesKHR(
-        vkPhysicalDevice,
-        vkSurface,
-        &count,
-        @ptrCast(surfacePresentModes.ptr),
-    ));
-
-    defer std.log.info("Trying to enumerate supported vulkan device surface present modes OK", .{});
-    return surfacePresentModes;
-}
-
+/// Get a list of surface formats supported by our physical devices
 fn getSupportedVkDeviceSurfaceFormats(
     allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkSurface: c.VkSurfaceKHR,
+    physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
 ) ![]c.VkSurfaceFormatKHR {
     std.log.debug("Trying to enumerate supported vulkan device surface formats...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan device surface formats failed", .{});
 
     var count: u32 = 0;
-    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(vkPhysicalDevice, vkSurface, &count, null));
+    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &count, null));
     std.log.debug("Vulkan reports '{}' device surfaces formats in total", .{count});
 
-    const surfaceFormats = try allocator.alloc(c.VkSurfaceFormatKHR, count);
-    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(vkPhysicalDevice, vkSurface, &count, surfaceFormats.ptr));
+    const surface_formats = try allocator.alloc(c.VkSurfaceFormatKHR, count);
+    try handleError(c.vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &count, surface_formats.ptr));
 
     defer std.log.debug("Trying to enumerate supported vulkan device surface formats OK", .{});
-    return surfaceFormats;
+    return surface_formats;
 }
 
+/// Select the preferred surface format from the supported formats
 fn selectPreferredSurfaceFormat(
     supportedFormats: []c.VkSurfaceFormatKHR,
 ) c.VkSurfaceFormatKHR {
@@ -796,64 +616,302 @@ fn selectPreferredSurfaceFormat(
                 "Selecting format with 'VK_FORMAT_B8G8R8A8_SRGB' and 'VK_COLOR_SPACE_SRGB_NONLINEAR_KHR'",
                 .{},
             );
+
             defer std.log.debug("Trying to select vulkan surface format OK", .{});
             return format;
         }
     }
 
-    defer std.log.debug("Selecting first format we found", .{});
+    defer std.log.debug("Preferred format not found, selecting first format we found", .{});
+
     defer std.log.debug("Trying to select vulkan surface format OK", .{});
+
     return supportedFormats[0];
 }
 
+/// Get a preferred surface format
+pub fn getPreferredVkSurfaceFormat(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkSurfaceFormatKHR {
+    var surface_format: c.VkSurfaceFormatKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
+        allocator,
+        physical_device,
+        surface,
+    );
+    defer allocator.free(supportedSurfaceFormats);
+
+    surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return surface_format;
+}
+
+// =VkPresentMode======================================================================================================
+// The Present mode dictates when and how the images you render are handed over to the monitor.
+
+/// Get a list of present modes supported by our physical devices
+fn getSupportedVkDeviceSurfacePresentModes(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) ![]c.VkPresentModeKHR {
+    std.log.info("Trying to enumerate supported vulkan device surface present modes...", .{});
+    errdefer std.log.err("Trying to enumerate supported vulkan device surface present modes failed", .{});
+
+    var count: u32 = 0;
+    try handleError(c.vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, null));
+    std.log.debug("Vulkan reports '{}' device surfaces present modes in total", .{count});
+
+    const surfacePresentModes = try allocator.alloc(c.VkPresentModeKHR, count);
+    try handleError(c.vkGetPhysicalDeviceSurfacePresentModesKHR(
+        physical_device,
+        surface,
+        &count,
+        surfacePresentModes.ptr,
+    ));
+
+    defer std.log.info("Trying to enumerate supported vulkan device surface present modes OK", .{});
+    return surfacePresentModes;
+}
+
+/// Select the preferred present mode from the supported formats
+fn selectPreferredSurfacePresentMode(
+    supported_present_modes: []c.VkPresentModeKHR,
+) c.VkPresentModeKHR {
+    std.log.info("Trying to select vulkan swapchain present mode...", .{});
+    errdefer std.log.err("Trying to select vulkan swapchain present mode failed", .{});
+
+    var selected_mode: c.VkPresentModeKHR = undefined;
+    for (supported_present_modes) |mode| {
+        if (mode == c.VK_PRESENT_MODE_MAILBOX_KHR) {
+            defer std.log.debug("Selecting present mode 'VK_PRESENT_MODE_MAILBOX_KHR'", .{});
+            selected_mode = mode;
+
+            defer std.log.info("Trying to select vulkan swapchain present mode OK", .{});
+            return selected_mode;
+        }
+    }
+
+    selected_mode = c.VK_PRESENT_MODE_FIFO_KHR;
+    defer std.log.debug("Selecting present mode 'VK_PRESENT_MODE_FIFO_KHR'", .{});
+
+    defer std.log.info("Trying to select vulkan swapchain present mode OK", .{});
+    return selected_mode;
+}
+
+/// Get a preferred present mode
+pub fn getPreferredVkPresentMode(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+    surface: c.VkSurfaceKHR,
+) !c.VkPresentModeKHR {
+    var present_mode: c.VkPresentModeKHR = undefined;
+
+    std.log.debug("Trying to get preferred surface format...", .{});
+    errdefer std.log.err("Trying to get preferred surface format failed", .{});
+
+    const supported_present_modes = try getSupportedVkDeviceSurfacePresentModes(
+        allocator,
+        physical_device,
+        surface,
+    );
+    defer allocator.free(supported_present_modes);
+
+    present_mode = selectPreferredSurfacePresentMode(supported_present_modes);
+
+    defer std.log.debug("Trying to get preferred surface format OK", .{});
+
+    return present_mode;
+}
+
+// =VkQueueFamilies====================================================================================================
+
+fn getQueueFamilyProperties(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+) ![]c.VkQueueFamilyProperties {
+    std.log.debug("Trying to get all queue family properties...", .{});
+    errdefer std.log.err("Trying to get all queue family properties failed", .{});
+
+    var count: u32 = 0;
+    c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, null);
+    const queue_family_properties = try allocator.alloc(c.VkQueueFamilyProperties, count);
+    c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_family_properties.ptr);
+
+    defer std.log.debug("Trying to get all queue family properties OK", .{});
+    return queue_family_properties;
+}
+
+pub fn findGraphicsQueueIndex(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+) !u32 {
+    std.log.debug("Trying to get graphics queue index...", .{});
+    errdefer std.log.err("Trying to get graphics queue index failed", .{});
+
+    const queue_family_properties = try getQueueFamilyProperties(allocator, physical_device);
+    defer allocator.free(queue_family_properties);
+
+    var graphics_queue_index: u32 = 0;
+    var graphicsQueueFound = false;
+    for (0..queue_family_properties.len) |i| {
+        if (queue_family_properties[i].queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0) {
+            graphics_queue_index = @intCast(i);
+            graphicsQueueFound = true;
+            break;
+        }
+    }
+
+    if (!graphicsQueueFound) {
+        std.log.err("Could not find queue with graphics bit set", .{});
+        return error.VkQueueNotFound;
+    }
+
+    std.log.debug("Using graphics queue index '{}'", .{graphics_queue_index});
+
+    defer std.log.debug("Trying to get graphics queue index OK", .{});
+    return graphics_queue_index;
+}
+
+pub fn findPresentQueueIndex(
+    allocator: std.mem.Allocator,
+    surface: c.VkSurfaceKHR,
+    physical_device: c.VkPhysicalDevice,
+) !u32 {
+    std.log.debug("Trying to get present queue index...", .{});
+    errdefer std.log.err("Trying to get present queue index failed", .{});
+
+    const queue_family_properties = try getQueueFamilyProperties(allocator, physical_device);
+    defer allocator.free(queue_family_properties);
+
+    var present_queue_index: u32 = 0;
+    var presentQueueFound = false;
+    for (0..queue_family_properties.len) |j| {
+        var vkBoolHasPresentSupport: c.VkBool32 = 0;
+        try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
+            physical_device,
+            @intCast(j),
+            surface,
+            &vkBoolHasPresentSupport,
+        ));
+        if (vkBoolHasPresentSupport > 0) {
+            present_queue_index = @intCast(j);
+            presentQueueFound = true;
+            break;
+        }
+    }
+
+    if (!presentQueueFound) {
+        std.log.err("Could not find queue with present bit set", .{});
+        return error.VkQueueNotFound;
+    }
+
+    std.log.debug("Using present queue index '{}'", .{present_queue_index});
+
+    defer std.log.debug("Trying to get present queue index OK", .{});
+    return present_queue_index;
+}
+
+// =VkDevice===========================================================================================================
+
 fn getSupportedVkDeviceLayers(
     allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !std.ArrayList([*c]const u8) {
+    physical_device: c.VkPhysicalDevice,
+) !std.ArrayList([*:0] const u8) {
     std.log.debug("Trying to enumerate supported vulkan device layers...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan device layers failed", .{});
 
     var count: u32 = 0;
-    try handleError(c.vkEnumerateDeviceLayerProperties(vkPhysicalDevice, &count, null));
+    try handleError(c.vkEnumerateDeviceLayerProperties(physical_device, &count, null));
     std.log.debug("Vulkan reports '{}' device layers supported in total", .{count});
 
-    const layerProperties = try allocator.alloc(c.VkLayerProperties, count);
-    defer allocator.free(layerProperties);
-    try handleError(c.vkEnumerateDeviceLayerProperties(vkPhysicalDevice, &count, layerProperties.ptr));
+    const layer_properties = try allocator.alloc(c.VkLayerProperties, count);
+    defer allocator.free(layer_properties);
+    try handleError(c.vkEnumerateDeviceLayerProperties(physical_device, &count, layer_properties.ptr));
 
-    var layers = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
-    for (layerProperties) |layerProperty| {
-        const name = std.mem.sliceTo(&layerProperty.layerName, 0);
+    var layers = try std.ArrayList([*:0] const u8).initCapacity(allocator, count);
+    errdefer {
+        for (layers.items) |ext| allocator.free(std.mem.span(ext));
+        layers.deinit(allocator);
+    }
+
+    for (layer_properties) |layer_property| {
+        const name = try allocator.dupeZ(u8, std.mem.sliceTo(&layer_property.layerName, 0));
+        errdefer allocator.free(name);
+
         std.log.debug("Support exists for device layer '{s}'", .{name});
-        try layers.append(allocator, try allocator.dupeZ(u8, name));
+
+        try layers.append(allocator, name);
     }
 
     defer std.log.debug("Trying to enumerate supported vulkan device layers OK", .{});
     return layers;
 }
 
+fn checkRequestedVkDeviceLayersSupported(
+    allocator: std.mem.Allocator,
+    physical_device: c.VkPhysicalDevice,
+    requested_layers: []const [*:0] const u8,
+) !void {
+    std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
+    errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
+
+    // note that we own the memory here
+    var supported_layers = try getSupportedVkDeviceLayers(allocator, physical_device);
+    defer {
+        for (supported_layers.items) |s| allocator.free(std.mem.span(s));
+        supported_layers.deinit(allocator);
+    }
+
+    for (requested_layers) |requested| {
+        var found = false;
+        for (supported_layers.items) |supported| {
+            if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
+                found = true;
+            }
+        }
+
+        if (!found) {
+            std.log.err("Could not find requested layer with name {s}", .{requested});
+            return error.VkErrorUnsupportedLayer;
+        } else {
+            std.log.debug("Found requested layer with name {s}", .{requested});
+        }
+    }
+
+    defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
+}
+
 fn getSupportedVkDeviceExtensions(
     allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-) !std.ArrayList([*c]const u8) {
+    physical_device: c.VkPhysicalDevice,
+) !std.ArrayList([*:0] const u8) {
     std.log.debug("Trying to enumerate supported vulkan device extensions...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan device extensions failed", .{});
 
     var count: u32 = 0;
-    try handleError(c.vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, null, &count, null));
+    try handleError(c.vkEnumerateDeviceExtensionProperties(physical_device, null, &count, null));
     std.log.debug("Vulkan reports '{}' device extenions supported in total", .{count});
 
-    const extensionProperties = try allocator.alloc(c.VkExtensionProperties, count);
-    defer allocator.free(extensionProperties);
+    const extension_properties = try allocator.alloc(c.VkExtensionProperties, count);
+    defer allocator.free(extension_properties);
     try handleError(c.vkEnumerateDeviceExtensionProperties(
-        vkPhysicalDevice,
+        physical_device,
         null,
         &count,
-        extensionProperties.ptr,
+        extension_properties.ptr,
     ));
 
-    var extensions = try std.ArrayList([*c]const u8).initCapacity(allocator, count);
-    for (extensionProperties) |extension_property| {
+    var extensions = try std.ArrayList([*:0] const u8).initCapacity(allocator, count);
+    for (extension_properties) |extension_property| {
         const name = std.mem.sliceTo(&extension_property.extensionName, 0);
         std.log.debug("Support exists for device extension '{s}'", .{name});
         try extensions.append(allocator, try allocator.dupeZ(u8, name));
@@ -865,20 +923,20 @@ fn getSupportedVkDeviceExtensions(
 
 fn checkRequestedVkDeviceExtensionsSupported(
     allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    requested_extensions: std.ArrayList([*c]const u8),
+    physical_device: c.VkPhysicalDevice,
+    requested_extensions: []const [*:0] const u8,
 ) !void {
     std.log.debug("Trying to checking if requested vulkan device extensions are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan device extensions are supported failed", .{});
 
     // note that we own the memory here
-    var supportedExtensions = try getSupportedVkDeviceExtensions(allocator, vkPhysicalDevice);
+    var supportedExtensions = try getSupportedVkDeviceExtensions(allocator, physical_device);
     defer {
         for (supportedExtensions.items) |s| allocator.free(std.mem.span(s));
         supportedExtensions.deinit(allocator);
     }
 
-    for (requested_extensions.items) |requested| {
+    for (requested_extensions) |requested| {
         var found = false;
         for (supportedExtensions.items) |supported| {
             if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
@@ -897,62 +955,28 @@ fn checkRequestedVkDeviceExtensionsSupported(
     defer std.log.debug("Trying to checking if requested vulkan device extensions are supported OK", .{});
 }
 
-fn checkRequestedVkDeviceLayersSupported(
-    allocator: std.mem.Allocator,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    requested_layers: std.ArrayList([*c]const u8),
-) !void {
-    std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
-    errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
-
-    // note that we own the memory here
-    var supportedLayers = try getSupportedVkDeviceLayers(allocator, vkPhysicalDevice);
-    defer {
-        for (supportedLayers.items) |s| allocator.free(std.mem.span(s));
-        supportedLayers.deinit(allocator);
-    }
-
-    for (requested_layers.items) |requested| {
-        var found = false;
-        for (supportedLayers.items) |supported| {
-            if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
-                found = true;
-            }
-        }
-
-        if (!found) {
-            std.log.err("Could not find requested layer with name {s}", .{requested});
-            return error.VkErrorUnsupportedLayer;
-        } else {
-            std.log.debug("Found requested layer with name {s}", .{requested});
-        }
-    }
-
-    defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
-}
-
 pub fn initVkDevice(
     allocator: std.mem.Allocator,
-    vk_graphics_queue_index: u32,
-    vk_present_queue_index: u32,
-    vk_physical_device: c.VkPhysicalDevice,
+    graphics_queue_index: u32,
+    present_queue_index: u32,
+    physical_device: c.VkPhysicalDevice,
 ) !c.VkDevice {
-    var vk_device: c.VkDevice = undefined;
+    var device: c.VkDevice = undefined;
 
     std.log.info("Trying to init vulkan device...", .{});
     errdefer std.log.err("Trying to init vulkan device failed", .{});
 
     // create our list of requested instance extensions
-    var extensions = try std.ArrayList([*c]const u8).initCapacity(allocator, 0);
+    var extensions = try std.ArrayList([*:0] const u8).initCapacity(allocator, 0);
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    try checkRequestedVkDeviceExtensionsSupported(allocator, vk_physical_device, extensions);
+    try checkRequestedVkDeviceExtensionsSupported(allocator, physical_device, extensions.items);
 
     // create our list of requested instance layers
-    var layers = try std.ArrayList([*c]const u8).initCapacity(allocator, 0);
+    var layers = try std.ArrayList([*:0] const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
     try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-    try checkRequestedVkDeviceLayersSupported(allocator, vk_physical_device, layers);
+    try checkRequestedVkDeviceLayersSupported(allocator, physical_device, layers.items);
 
     // populate queue families
     const queuePriorities: f32 = 1.0;
@@ -964,147 +988,156 @@ pub fn initVkDevice(
         .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .pNext = null,
         .flags = 0,
-        .queueFamilyIndex = vk_graphics_queue_index,
+        .queueFamilyIndex = graphics_queue_index,
         .queueCount = 1,
         .pQueuePriorities = &queuePriorities,
     });
 
     // present queue family
-    if (vk_present_queue_index != vk_graphics_queue_index) {
+    if (present_queue_index != graphics_queue_index) {
         try queueFamilyCreateInfos.append(allocator, c.VkDeviceQueueCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .queueFamilyIndex = vk_present_queue_index,
+            .queueFamilyIndex = present_queue_index,
             .queueCount = 1,
             .pQueuePriorities = &queuePriorities,
         });
     }
 
     // create device
-    try handleError(c.vkCreateDevice(vk_physical_device, &c.VkDeviceCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
+    try handleError(c.vkCreateDevice(
+        physical_device,
+        &c.VkDeviceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
 
-        // specify queue families to create, where we can later retrieve a handle for
-        .queueCreateInfoCount = @intCast(queueFamilyCreateInfos.items.len),
-        .pQueueCreateInfos = queueFamilyCreateInfos.items.ptr,
+            // specify queue families to create, where we can later retrieve a handle for
+            .pQueueCreateInfos = queueFamilyCreateInfos.items.ptr,
+            .queueCreateInfoCount = @intCast(queueFamilyCreateInfos.items.len),
 
-        // layers to enable
-        .enabledLayerCount = @intCast(layers.items.len),
-        .ppEnabledLayerNames = layers.items.ptr,
+            // layers to enable
+            .ppEnabledLayerNames = layers.items.ptr,
+            .enabledLayerCount = @intCast(layers.items.len),
 
-        // extensions to enable
-        .enabledExtensionCount = @intCast(extensions.items.len),
-        .ppEnabledExtensionNames = extensions.items.ptr,
+            // extensions to enable
+            .ppEnabledExtensionNames = extensions.items.ptr,
+            .enabledExtensionCount = @intCast(extensions.items.len),
 
-        // features to enable
-        .pEnabledFeatures = &c.VkPhysicalDeviceFeatures{
-            .samplerAnisotropy = c.VK_TRUE,
+            // features to enable
+            .pEnabledFeatures = &c.VkPhysicalDeviceFeatures{
+                .samplerAnisotropy = c.VK_TRUE,
+            },
         },
-    }, null, &vk_device));
+        null,
+        &device,
+    ));
 
     defer std.log.info("Trying to init vulkan device OK", .{});
-    return vk_device;
+    return device;
 }
 
-pub fn deinitVkDevice(vk_device: c.VkDevice) void {
-    c.vkDestroyDevice(vk_device, null);
+pub fn deinitVkDevice(device: c.VkDevice) void {
+    c.vkDestroyDevice(device, null);
 
     defer std.log.info("Deinit vulkan device OK", .{});
 }
 
 // =VkSwapchain========================================================================================================
+// The Swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed. 
+// Provides the images that we draw on.
 
 pub fn initVkSwapchain(
-    vkDevice: c.VkDevice,
-    vkSurface: c.VkSurfaceKHR,
-    vkSurfaceCapabilities: c.VkSurfaceCapabilitiesKHR,
-    selectedSurfaceFormat: c.VkSurfaceFormatKHR,
-    selectedSwapExtent: c.VkExtent2D,
-    selectedPresentMode: c.VkPresentModeKHR,
-    graphicsQueueIndex: u32,
-    presentQueueIndex: u32,
+    device: c.VkDevice,
+    surface: c.VkSurfaceKHR,
+    surface_capabilities: c.VkSurfaceCapabilitiesKHR,
+    surface_format: c.VkSurfaceFormatKHR,
+    swap_extent: c.VkExtent2D,
+    present_mode: c.VkPresentModeKHR,
+    graphics_queue_index: u32,
+    present_queue_index: u32,
 ) !c.VkSwapchainKHR {
-    var vk_swapchain: c.VkSwapchainKHR = undefined;
+    var swapchain: c.VkSwapchainKHR = undefined;
 
     std.log.info("Trying to init vulkan swapchain...", .{});
     errdefer std.log.err("Trying to init vulkan swapchain failed", .{});
 
-    const imageSharingMode: u32 = blk: {
-        if (graphicsQueueIndex != presentQueueIndex) {
+    const image_sharing_mode: u32 = blk: {
+        if (graphics_queue_index != present_queue_index) {
             break :blk c.VK_SHARING_MODE_CONCURRENT;
         } else {
             break :blk c.VK_SHARING_MODE_EXCLUSIVE;
         }
     };
 
-    const queueFamilyIndexCount: u32 = blk: {
-        if (graphicsQueueIndex != presentQueueIndex) {
+    const queue_family_index_count: u32 = blk: {
+        if (graphics_queue_index != present_queue_index) {
             break :blk 2;
         } else {
             break :blk 0;
         }
     };
 
+    const queue_pair = [_]u32{ graphics_queue_index, present_queue_index };
     const pQueueFamilyIndices: [*c]const u32 = blk: {
-        if (graphicsQueueIndex != presentQueueIndex) {
-            break :blk @ptrCast(&[_]u32{ graphicsQueueIndex, presentQueueIndex });
+        if (graphics_queue_index != present_queue_index) {
+            break :blk &queue_pair;
         } else {
             break :blk null;
         }
     };
 
     // initialize
-    try handleError(c.vkCreateSwapchainKHR(vkDevice, &c.VkSwapchainCreateInfoKHR{
+    try handleError(c.vkCreateSwapchainKHR(device, &c.VkSwapchainCreateInfoKHR{
         .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = null,
         .flags = 0,
-        .surface = vkSurface,
-        .minImageCount = vkSurfaceCapabilities.minImageCount,
-        .imageFormat = selectedSurfaceFormat.format,
-        .imageColorSpace = selectedSurfaceFormat.colorSpace,
-        .imageExtent = selectedSwapExtent,
+        .surface = surface,
+        .minImageCount = surface_capabilities.minImageCount,
+        .imageFormat = surface_format.format,
+        .imageColorSpace = surface_format.colorSpace,
+        .imageExtent = swap_extent,
         .imageArrayLayers = 1,
         .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .imageSharingMode = @intCast(imageSharingMode),
-        .queueFamilyIndexCount = @intCast(queueFamilyIndexCount),
+        .imageSharingMode = @intCast(image_sharing_mode),
+        .queueFamilyIndexCount = @intCast(queue_family_index_count),
         .pQueueFamilyIndices = pQueueFamilyIndices,
-        .preTransform = vkSurfaceCapabilities.currentTransform,
+        .preTransform = surface_capabilities.currentTransform,
         .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = selectedPresentMode,
+        .presentMode = present_mode,
         .clipped = c.VK_TRUE,
         .oldSwapchain = null,
-    }, null, &vk_swapchain));
+    }, null, &swapchain));
 
     defer std.log.info("Trying to init vulkan swapchain OK", .{});
-    return vk_swapchain;
+    return swapchain;
 }
 
 pub fn deinitVkSwapchain(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkSwapchain: c.VkSwapchainKHR,
 ) void {
-    c.vkDestroySwapchainKHR(vkDevice, vkSwapchain, null);
+    c.vkDestroySwapchainKHR(device, vkSwapchain, null);
     defer std.log.info("Deinit vulkan swapchain OK", .{});
 }
 
 // =VkImages===========================================================================================================
+// Images are that which we draw on.
 
 /// Memory of the image inside the swapchain
 pub fn initVkImages(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkSwapchain: c.VkSwapchainKHR,
 ) ![]c.VkImage {
     std.log.info("Trying to get images...", .{});
     errdefer std.log.info("Trying to get images failed", .{});
 
     var count: u32 = 0;
-    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, null));
+    try handleError(c.vkGetSwapchainImagesKHR(device, vkSwapchain, &count, null));
     const images = try allocator.alloc(c.VkImage, count);
-    try handleError(c.vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &count, images.ptr));
+    try handleError(c.vkGetSwapchainImagesKHR(device, vkSwapchain, &count, images.ptr));
 
     std.log.info("Acquired {} images", .{count});
 
@@ -1123,22 +1156,22 @@ pub fn deinitVkImages(
 
 pub fn initVkImageViews(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkImages: []c.VkImage,
-    selectedSurfaceFormat: c.VkSurfaceFormatKHR,
+    surface_format: c.VkSurfaceFormatKHR,
 ) ![]c.VkImageView {
     std.log.info("Trying to get image views...", .{});
     errdefer std.log.info("Trying to get image views failed", .{});
 
     const vkImageViews = try allocator.alloc(c.VkImageView, vkImages.len);
     for (0..vkImages.len) |i| {
-        try handleError(c.vkCreateImageView(vkDevice, &c.VkImageViewCreateInfo{
+        try handleError(c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .image = vkImages[i],
             .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-            .format = selectedSurfaceFormat.format,
+            .format = surface_format.format,
             .components = c.VkComponentMapping{
                 .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
                 .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -1159,9 +1192,9 @@ pub fn initVkImageViews(
     return vkImageViews;
 }
 
-pub fn deinitVkImageViews(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkImageViews: []c.VkImageView) void {
+pub fn deinitVkImageViews(allocator: std.mem.Allocator, device: c.VkDevice, vkImageViews: []c.VkImageView) void {
     for (0..vkImageViews.len) |i| {
-        c.vkDestroyImageView(vkDevice, vkImageViews[i], null);
+        c.vkDestroyImageView(device, vkImageViews[i], null);
     }
     allocator.free(vkImageViews);
 
@@ -1169,46 +1202,49 @@ pub fn deinitVkImageViews(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vk
 }
 
 // =Shaders============================================================================================================
-pub fn initVkShaderModule(comptime path: anytype, vkDevice: c.VkDevice) !c.VkShaderModule {
-    var vk_shader_module: c.VkShaderModule = undefined;
+// The Shaders are the code that we run on the GPU
+
+pub fn initVkShaderModule(comptime path: anytype, device: c.VkDevice) !c.VkShaderModule {
+    var shader_module: c.VkShaderModule = undefined;
 
     std.log.info("Trying to init shader module with path '{s}'...", .{path});
     errdefer std.log.info("Trying to init shader module with path '{s}' failed", .{path});
 
-    const code = @embedFile(path);
-    try handleError(c.vkCreateShaderModule(vkDevice, &c.VkShaderModuleCreateInfo{
+    const code align(@alignOf(u32)) = @embedFile(path).*;
+
+    try handleError(c.vkCreateShaderModule(device, &c.VkShaderModuleCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .pNext = null,
         .flags = 0,
         .codeSize = code.len,
-        .pCode = @ptrCast(@alignCast(code)),
-    }, null, &vk_shader_module));
+        .pCode = std.mem.bytesAsSlice(u32, &code).ptr,
+    }, null, &shader_module));
 
     defer std.log.info("Trying to init shader module with path '{s}' OK", .{path});
-    return vk_shader_module;
+    return shader_module;
 }
 
 pub fn deinitVkShaderModule(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkShaderModule: c.VkShaderModule,
 ) void {
-    c.vkDestroyShaderModule(vkDevice, vkShaderModule, null);
+    c.vkDestroyShaderModule(device, vkShaderModule, null);
 
     defer std.log.info("Deinit vulkan shader module OK", .{});
 }
 
-// =GraphicsPipeline===================================================================================================
+// =VkGraphicsPipeline=================================================================================================
 
 pub fn initVkRenderPass(
-    vkDevice: c.VkDevice,
-    vkSurfaceFormat: c.VkSurfaceFormatKHR,
+    device: c.VkDevice,
+    surface_format: c.VkSurfaceFormatKHR,
 ) !c.VkRenderPass {
-    var vk_render_pass: c.VkRenderPass = undefined;
+    var render_pass: c.VkRenderPass = undefined;
 
     std.log.info("Trying to init render pass...", .{});
     errdefer std.log.info("Trying to init render pass failed", .{});
 
-    try handleError(c.vkCreateRenderPass(vkDevice, &c.VkRenderPassCreateInfo{
+    try handleError(c.vkCreateRenderPass(device, &c.VkRenderPassCreateInfo{
         .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = null,
         .flags = 0,
@@ -1216,7 +1252,7 @@ pub fn initVkRenderPass(
         .pAttachments = &[_]c.VkAttachmentDescription{
             c.VkAttachmentDescription{
                 .flags = 0,
-                .format = vkSurfaceFormat.format,
+                .format = surface_format.format,
                 .samples = c.VK_SAMPLE_COUNT_1_BIT,
                 .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
@@ -1254,23 +1290,25 @@ pub fn initVkRenderPass(
             .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .dependencyFlags = 0,
         },
-    }, null, &vk_render_pass));
+    }, null, &render_pass));
 
     defer std.log.info("Trying to init render pass...", .{});
-    return vk_render_pass;
+    return render_pass;
 }
 
 pub fn deinitVkRenderPass(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkRenderPass: c.VkRenderPass,
 ) void {
-    c.vkDestroyRenderPass(vkDevice, vkRenderPass, null);
+    c.vkDestroyRenderPass(device, vkRenderPass, null);
 
     defer std.log.info("Deinit vulkan render pass OK", .{});
 }
 
+// =VkDescriptorSet====================================================================================================
+
 pub fn initVkDescriptorSetLayout(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
 ) !c.VkDescriptorSetLayout {
     var vkDescriptorSetLayout: c.VkDescriptorSetLayout = undefined;
 
@@ -1278,7 +1316,7 @@ pub fn initVkDescriptorSetLayout(
     errdefer std.log.err("Trying to init vulkan descriptor set layout", .{});
 
     try handleError(c.vkCreateDescriptorSetLayout(
-        vkDevice,
+        device,
         &c.VkDescriptorSetLayoutCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = null,
@@ -1309,13 +1347,15 @@ pub fn initVkDescriptorSetLayout(
     return vkDescriptorSetLayout;
 }
 
-pub fn deinitVkDescriptorSetLayout(vkDevice: c.VkDevice, vkDescriptorSetLayout: c.VkDescriptorSetLayout) void {
-    c.vkDestroyDescriptorSetLayout(vkDevice, vkDescriptorSetLayout, null);
+pub fn deinitVkDescriptorSetLayout(device: c.VkDevice, vkDescriptorSetLayout: c.VkDescriptorSetLayout) void {
+    c.vkDestroyDescriptorSetLayout(device, vkDescriptorSetLayout, null);
     std.log.info("Deinit descriptor set layout OK", .{});
 }
 
+// =VkPipeline=========================================================================================================
+
 pub fn initVkPipelineLayout(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkDescriptorSetLayout: c.VkDescriptorSetLayout,
 ) !c.VkPipelineLayout {
     var vkPipelineLayout: c.VkPipelineLayout = undefined;
@@ -1324,7 +1364,7 @@ pub fn initVkPipelineLayout(
     errdefer std.log.info("Trying to init pipeline layout failed", .{});
 
     try handleError(c.vkCreatePipelineLayout(
-        vkDevice,
+        device,
         &c.VkPipelineLayoutCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
@@ -1347,15 +1387,15 @@ pub fn initVkPipelineLayout(
 }
 
 pub fn deinitVkPipelineLayout(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkPipelineLayout: c.VkPipelineLayout,
 ) void {
-    c.vkDestroyPipelineLayout(vkDevice, vkPipelineLayout, null);
+    c.vkDestroyPipelineLayout(device, vkPipelineLayout, null);
     defer std.log.info("Deinit vulkan pipeline layout OK", .{});
 }
 
 pub fn initVkGraphicsPipeline(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkSwapchainExtent: c.VkExtent2D,
     vkRenderPass: c.VkRenderPass,
     vkPipelineLayout: c.VkPipelineLayout,
@@ -1369,7 +1409,7 @@ pub fn initVkGraphicsPipeline(
 
     //
     try handleError(c.vkCreateGraphicsPipelines(
-        vkDevice,
+        device,
         null,
         1,
         &c.VkGraphicsPipelineCreateInfo{
@@ -1521,8 +1561,8 @@ pub fn initVkGraphicsPipeline(
     return vkGraphicsPipeline;
 }
 
-pub fn deinitVkPipeline(vkDevice: c.VkDevice, vkPipeline: c.VkPipeline) void {
-    c.vkDestroyPipeline(vkDevice, vkPipeline, null);
+pub fn deinitVkPipeline(device: c.VkDevice, vkPipeline: c.VkPipeline) void {
+    c.vkDestroyPipeline(device, vkPipeline, null);
     defer std.log.info("Deinit vulkan pipeline OK", .{});
 }
 
@@ -1530,7 +1570,7 @@ pub fn deinitVkPipeline(vkDevice: c.VkDevice, vkPipeline: c.VkPipeline) void {
 
 pub fn initFramebuffers(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkImageViews: []c.VkImageView,
     vkRenderPass: c.VkRenderPass,
     vkSwapchainExtent: c.VkExtent2D,
@@ -1542,7 +1582,7 @@ pub fn initFramebuffers(
 
     for (0..vkImageViews.len) |i| {
         try handleError(c.vkCreateFramebuffer(
-            vkDevice,
+            device,
             &c.VkFramebufferCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .pNext = null,
@@ -1567,11 +1607,11 @@ pub fn initFramebuffers(
 
 pub fn deinitFramebuffers(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkFramebuffers: []c.VkFramebuffer,
 ) void {
     for (0..vkFramebuffers.len) |i| {
-        c.vkDestroyFramebuffer(vkDevice, vkFramebuffers[i], null);
+        c.vkDestroyFramebuffer(device, vkFramebuffers[i], null);
     }
 
     allocator.free(vkFramebuffers);
@@ -1582,7 +1622,7 @@ pub fn deinitFramebuffers(
 // =CommandBuffers=====================================================================================================
 
 pub fn initCommandPool(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     selectedGraphicsQueueIndex: u32,
 ) !c.VkCommandPool {
     var vkCommandPool: c.VkCommandPool = undefined;
@@ -1591,7 +1631,7 @@ pub fn initCommandPool(
     errdefer std.log.info("Trying to init command pool failed", .{});
 
     try handleError(c.vkCreateCommandPool(
-        vkDevice,
+        device,
         &c.VkCommandPoolCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext = null,
@@ -1606,14 +1646,14 @@ pub fn initCommandPool(
     return vkCommandPool;
 }
 
-pub fn deinitCommandPool(vkDevice: c.VkDevice, vkCommandPool: c.VkCommandPool) void {
-    c.vkDestroyCommandPool(vkDevice, vkCommandPool, null);
+pub fn deinitCommandPool(device: c.VkDevice, vkCommandPool: c.VkCommandPool) void {
+    c.vkDestroyCommandPool(device, vkCommandPool, null);
     defer std.log.info("Deinit vulkan command pool OK", .{});
 }
 
 pub fn initCommandBuffers(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkCommandPool: c.VkCommandPool,
     bufferCount: usize,
 ) ![]c.VkCommandBuffer {
@@ -1625,7 +1665,7 @@ pub fn initCommandBuffers(
     vkCommandBuffers = try allocator.alloc(c.VkCommandBuffer, bufferCount);
 
     try handleError(c.vkAllocateCommandBuffers(
-        vkDevice,
+        device,
         &c.VkCommandBufferAllocateInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -1652,11 +1692,11 @@ pub fn deinitCommandBuffers(
 // =Buffers============================================================================================================
 
 pub fn begOneTimeCommand(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkCommandPool: c.VkCommandPool,
 ) !c.VkCommandBuffer {
     var vkCommandBuffer: c.VkCommandBuffer = undefined;
-    try handleError(c.vkAllocateCommandBuffers(vkDevice, &c.VkCommandBufferAllocateInfo{
+    try handleError(c.vkAllocateCommandBuffers(device, &c.VkCommandBufferAllocateInfo{
         .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = null,
         .commandPool = vkCommandPool,
@@ -1675,7 +1715,7 @@ pub fn begOneTimeCommand(
 }
 
 pub fn endOneTimeCommand(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkGraphicsQueue: c.VkQueue,
     vkCommandBuffer: c.VkCommandBuffer,
     vkCommandPool: c.VkCommandPool,
@@ -1696,42 +1736,42 @@ pub fn endOneTimeCommand(
 
     try handleError(c.vkQueueWaitIdle(vkGraphicsQueue));
 
-    c.vkFreeCommandBuffers(vkDevice, vkCommandPool, 1, &vkCommandBuffer);
+    c.vkFreeCommandBuffers(device, vkCommandPool, 1, &vkCommandBuffer);
 }
 
 pub fn bufferCopy(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkCommandPool: c.VkCommandPool,
     vkGraphicsQueue: c.VkQueue,
     srcBuffer: c.VkBuffer,
     dstBuffer: c.VkBuffer,
-    vkDeviceSize: c.VkDeviceSize,
+    deviceSize: c.VkDeviceSize,
 ) !void {
-    const vkCommandBuffer: c.VkCommandBuffer = try begOneTimeCommand(vkDevice, vkCommandPool);
+    const vkCommandBuffer: c.VkCommandBuffer = try begOneTimeCommand(device, vkCommandPool);
 
     {
         c.vkCmdCopyBuffer(vkCommandBuffer, srcBuffer, dstBuffer, 1, &c.VkBufferCopy{
             .srcOffset = 0,
             .dstOffset = 0,
-            .size = vkDeviceSize,
+            .size = deviceSize,
         });
     }
 
-    try endOneTimeCommand(vkDevice, vkGraphicsQueue, vkCommandBuffer, vkCommandPool);
+    try endOneTimeCommand(device, vkGraphicsQueue, vkCommandBuffer, vkCommandPool);
 }
 
 fn findMemoryType(
-    vkPhysicalDevice: c.VkPhysicalDevice,
+    physical_device: c.VkPhysicalDevice,
     vkTypeFilter: u32,
     vkMemoryPropertyFlags: c.VkMemoryPropertyFlags,
 ) !u32 {
-    var vkPhysicalDeviceMemoryProperties: c.VkPhysicalDeviceMemoryProperties = undefined;
-    c.vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, &vkPhysicalDeviceMemoryProperties);
+    var physical_deviceMemoryProperties: c.VkPhysicalDeviceMemoryProperties = undefined;
+    c.vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_deviceMemoryProperties);
 
-    for (0..vkPhysicalDeviceMemoryProperties.memoryTypeCount) |i| {
+    for (0..physical_deviceMemoryProperties.memoryTypeCount) |i| {
         const mask = @as(u32, 1) << @as(u5, @intCast(i));
         if ((vkTypeFilter & mask) > 0 and
-            (vkPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & vkMemoryPropertyFlags) == //
+            (physical_deviceMemoryProperties.memoryTypes[i].propertyFlags & vkMemoryPropertyFlags) == //
                 vkMemoryPropertyFlags)
         {
             return @intCast(i);
@@ -1742,9 +1782,9 @@ fn findMemoryType(
 }
 
 fn initBuffer(
-    vkDevice: c.VkDevice,
-    vkPhysicalDevice: c.VkPhysicalDevice,
-    vkDeviceSize: c.VkDeviceSize,
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
+    deviceSize: c.VkDeviceSize,
     vkBufferUsageFlags: c.VkBufferUsageFlags,
     vkMemoryPropertyFlags: c.VkMemoryPropertyFlags,
     vkBuffer: *c.VkBuffer,
@@ -1754,12 +1794,12 @@ fn initBuffer(
     errdefer std.log.info("Trying to init buffer failed", .{});
 
     try handleError(c.vkCreateBuffer(
-        vkDevice,
+        device,
         &c.VkBufferCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .size = vkDeviceSize,
+            .size = deviceSize,
             .usage = vkBufferUsageFlags,
             .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
@@ -1770,31 +1810,31 @@ fn initBuffer(
     ));
 
     var vkMemoryRequirements: c.VkMemoryRequirements = undefined;
-    c.vkGetBufferMemoryRequirements(vkDevice, vkBuffer.*, &vkMemoryRequirements);
+    c.vkGetBufferMemoryRequirements(device, vkBuffer.*, &vkMemoryRequirements);
 
-    try handleError(c.vkAllocateMemory(vkDevice, &c.VkMemoryAllocateInfo{
+    try handleError(c.vkAllocateMemory(device, &c.VkMemoryAllocateInfo{
         .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = null,
         .allocationSize = vkMemoryRequirements.size,
         .memoryTypeIndex = try findMemoryType(
-            vkPhysicalDevice,
+            physical_device,
             vkMemoryRequirements.memoryTypeBits,
             vkMemoryPropertyFlags,
         ),
     }, null, vkBufferMemory));
 
-    try handleError(c.vkBindBufferMemory(vkDevice, vkBuffer.*, vkBufferMemory.*, 0));
+    try handleError(c.vkBindBufferMemory(device, vkBuffer.*, vkBufferMemory.*, 0));
 
     defer std.log.info("Trying to init buffer OK", .{});
 }
 
 fn deinitBuffer(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkBuffer: c.VkBuffer,
     vkBufferMemory: c.VkDeviceMemory,
 ) void {
-    c.vkDestroyBuffer(vkDevice, vkBuffer, null);
-    c.vkFreeMemory(vkDevice, vkBufferMemory, null);
+    c.vkDestroyBuffer(device, vkBuffer, null);
+    c.vkFreeMemory(device, vkBufferMemory, null);
 
     defer std.log.info("Deinit vulkan buffer OK", .{});
 }
@@ -1810,8 +1850,8 @@ pub const VertexBufferSet = struct {
 
 pub fn initVertexBufferSet(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
-    vkPhysicalDevice: c.VkPhysicalDevice,
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
     max_vertices: usize,
     bufferCount: usize,
 ) !VertexBufferSet {
@@ -1828,8 +1868,8 @@ pub fn initVertexBufferSet(
 
     for (0..bufferCount) |i| {
         try initBuffer(
-            vkDevice,
-            vkPhysicalDevice,
+            device,
+            physical_device,
             buffer_size,
             c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1838,7 +1878,7 @@ pub fn initVertexBufferSet(
         );
 
         try handleError(c.vkMapMemory(
-            vkDevice,
+            device,
             vertex_buffer_set.vkBuffersMemory[i],
             0,
             buffer_size,
@@ -1853,11 +1893,11 @@ pub fn initVertexBufferSet(
 
 pub fn deinitVertexBufferSet(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vertex_buffer_set: VertexBufferSet,
 ) void {
     for (0..vertex_buffer_set.vkBuffers.len) |i| {
-        deinitBuffer(vkDevice, vertex_buffer_set.vkBuffers[i], vertex_buffer_set.vkBuffersMemory[i]);
+        deinitBuffer(device, vertex_buffer_set.vkBuffers[i], vertex_buffer_set.vkBuffersMemory[i]);
     }
     allocator.free(vertex_buffer_set.vkBuffers);
     allocator.free(vertex_buffer_set.vkBuffersMemory);
@@ -1875,8 +1915,8 @@ pub const UniformBufferSet = struct {
 
 pub fn initUniformBufferSet(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
-    vkPhysicalDevice: c.VkPhysicalDevice,
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
     bufferCount: usize,
 ) !UniformBufferSet {
     std.log.info("Trying to init uniform buffers...", .{});
@@ -1889,8 +1929,8 @@ pub fn initUniformBufferSet(
 
     for (0..bufferCount) |i| {
         try initBuffer(
-            vkDevice,
-            vkPhysicalDevice,
+            device,
+            physical_device,
             @sizeOf(Uniform),
             c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1899,7 +1939,7 @@ pub fn initUniformBufferSet(
         );
 
         try handleError(c.vkMapMemory(
-            vkDevice,
+            device,
             uniform_buffer_set.vkUniformBuffersMemory[i],
             0,
             @sizeOf(Uniform),
@@ -1914,11 +1954,11 @@ pub fn initUniformBufferSet(
 
 pub fn deinitUniformBufferSet(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     uniform_buffer_set: UniformBufferSet,
 ) void {
     for (0..uniform_buffer_set.vkUniformBuffers.len) |i| {
-        deinitBuffer(vkDevice, uniform_buffer_set.vkUniformBuffers[i], uniform_buffer_set.vkUniformBuffersMemory[i]);
+        deinitBuffer(device, uniform_buffer_set.vkUniformBuffers[i], uniform_buffer_set.vkUniformBuffersMemory[i]);
     }
     allocator.free(uniform_buffer_set.vkUniformBuffers);
     allocator.free(uniform_buffer_set.vkUniformBuffersMemory);
@@ -1928,14 +1968,14 @@ pub fn deinitUniformBufferSet(
 }
 
 // =Semaphores=========================================================================================================
-pub fn initVkSemaphore(vkDevice: c.VkDevice) !c.VkSemaphore {
+pub fn initVkSemaphore(device: c.VkDevice) !c.VkSemaphore {
     var vkSemaphore: c.VkSemaphore = undefined;
 
     std.log.info("Trying to init semaphore...", .{});
     errdefer std.log.info("Trying to init semaphore failed", .{});
 
     try handleError(c.vkCreateSemaphore(
-        vkDevice,
+        device,
         &c.VkSemaphoreCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             .pNext = null,
@@ -1950,11 +1990,11 @@ pub fn initVkSemaphore(vkDevice: c.VkDevice) !c.VkSemaphore {
 }
 
 pub fn deinitVkSemaphore(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkSemaphore: c.VkSemaphore,
 ) void {
     c.vkDestroySemaphore(
-        vkDevice,
+        device,
         vkSemaphore,
         null,
     );
@@ -1964,7 +2004,7 @@ pub fn deinitVkSemaphore(
 
 pub fn initVkSemaphores(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     count: usize,
 ) ![]c.VkSemaphore {
     var vkSemaphores: []c.VkSemaphore = undefined;
@@ -1974,16 +2014,16 @@ pub fn initVkSemaphores(
 
     vkSemaphores = try allocator.alloc(c.VkSemaphore, count);
     for (vkSemaphores) |*vkSemaphore| {
-        vkSemaphore.* = try initVkSemaphore(vkDevice);
+        vkSemaphore.* = try initVkSemaphore(device);
     }
 
     defer std.log.info("Trying to init {} semaphores OK", .{count});
     return vkSemaphores;
 }
 
-pub fn deinitVkSemaphores(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkSemaphores: []c.VkSemaphore) void {
+pub fn deinitVkSemaphores(allocator: std.mem.Allocator, device: c.VkDevice, vkSemaphores: []c.VkSemaphore) void {
     for (vkSemaphores) |vkSemaphore| {
-        deinitVkSemaphore(vkDevice, vkSemaphore);
+        deinitVkSemaphore(device, vkSemaphore);
     }
     allocator.free(vkSemaphores);
 
@@ -1992,14 +2032,14 @@ pub fn deinitVkSemaphores(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vk
 
 // =Fences=============================================================================================================
 
-pub fn initVkFence(vkDevice: c.VkDevice) !c.VkFence {
+pub fn initVkFence(device: c.VkDevice) !c.VkFence {
     var vkFence: c.VkFence = undefined;
 
     std.log.info("Trying to init fence...", .{});
     errdefer std.log.info("Trying to init fence failed", .{});
 
     try handleError(c.vkCreateFence(
-        vkDevice,
+        device,
         &c.VkFenceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .pNext = null,
@@ -2013,16 +2053,16 @@ pub fn initVkFence(vkDevice: c.VkDevice) !c.VkFence {
     return vkFence;
 }
 
-pub fn deinitVkFence(vkDevice: c.VkDevice, vkFence: c.VkFence) void {
+pub fn deinitVkFence(device: c.VkDevice, vkFence: c.VkFence) void {
     c.vkDestroyFence(
-        vkDevice,
+        device,
         vkFence,
         null,
     );
     defer std.log.info("Deinit vulkan fence OK", .{});
 }
 
-pub fn initVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, count: usize) ![]c.VkFence {
+pub fn initVkFences(allocator: std.mem.Allocator, device: c.VkDevice, count: usize) ![]c.VkFence {
     var vkFences: []c.VkFence = undefined;
 
     std.log.info("Trying to init {} fences...", .{count});
@@ -2030,16 +2070,16 @@ pub fn initVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, count: u
 
     vkFences = try allocator.alloc(c.VkFence, count);
     for (vkFences) |*vkFence| {
-        vkFence.* = try initVkFence(vkDevice);
+        vkFence.* = try initVkFence(device);
     }
 
     defer std.log.info("Trying to init {} fences OK", .{count});
     return vkFences;
 }
 
-pub fn deinitVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkFences: []c.VkFence) void {
+pub fn deinitVkFences(allocator: std.mem.Allocator, device: c.VkDevice, vkFences: []c.VkFence) void {
     for (vkFences) |vkFence| {
-        deinitVkFence(vkDevice, vkFence);
+        deinitVkFence(device, vkFence);
     }
     allocator.free(vkFences);
 
@@ -2049,7 +2089,7 @@ pub fn deinitVkFences(allocator: std.mem.Allocator, vkDevice: c.VkDevice, vkFenc
 // =DescriptorPool=====================================================================================================
 
 pub fn initVkDescriptorPool(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkUniformBuffers: []c.VkBuffer,
 ) !c.VkDescriptorPool {
     var vkDescriptorPool: c.VkDescriptorPool = undefined;
@@ -2058,7 +2098,7 @@ pub fn initVkDescriptorPool(
     errdefer std.log.info("Trying to init descriptor pool with capacity {} failed", .{vkUniformBuffers.len});
 
     try handleError(c.vkCreateDescriptorPool(
-        vkDevice,
+        device,
         &c.VkDescriptorPoolCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = null,
@@ -2085,10 +2125,10 @@ pub fn initVkDescriptorPool(
 }
 
 pub fn deinitVkDescriptorPool(
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkDescriptorPool: c.VkDescriptorPool,
 ) void {
-    c.vkDestroyDescriptorPool(vkDevice, vkDescriptorPool, null);
+    c.vkDestroyDescriptorPool(device, vkDescriptorPool, null);
 
     defer std.log.info("Deinit descriptor pool OK", .{});
 }
@@ -2097,7 +2137,7 @@ pub fn deinitVkDescriptorPool(
 
 pub fn initVkDescriptorSets(
     allocator: std.mem.Allocator,
-    vkDevice: c.VkDevice,
+    device: c.VkDevice,
     vkDescriptorSetLayout: c.VkDescriptorSetLayout,
     vkDescriptorPool: c.VkDescriptorPool,
     vkUniformBuffers: []c.VkBuffer,
@@ -2114,7 +2154,7 @@ pub fn initVkDescriptorSets(
     }
 
     vkDescriptorSets = try allocator.alloc(c.VkDescriptorSet, vkUniformBuffers.len);
-    try handleError(c.vkAllocateDescriptorSets(vkDevice, &c.VkDescriptorSetAllocateInfo{
+    try handleError(c.vkAllocateDescriptorSets(device, &c.VkDescriptorSetAllocateInfo{
         .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = null,
         .descriptorPool = vkDescriptorPool,
@@ -2124,7 +2164,7 @@ pub fn initVkDescriptorSets(
 
     for (0..@intCast(vkUniformBuffers.len)) |i| {
         c.vkUpdateDescriptorSets(
-            vkDevice,
+            device,
             1,
             &[_]c.VkWriteDescriptorSet{
                 c.VkWriteDescriptorSet{
