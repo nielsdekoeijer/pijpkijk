@@ -405,7 +405,7 @@ pub fn initVkPhysicalDevice(
             },
         };
 
-        const deviceName = properties.deviceName;
+        const deviceName = std.mem.sliceTo(&properties.deviceName, 0);
         const apiVersion = properties.apiVersion;
         std.log.debug(
             "Physical device found with name '{s}' of type '{s}' supporting Vulkan '{}.{}.{}'",
@@ -507,7 +507,7 @@ pub fn initVkPhysicalDevice(
     // Small snippet just for printing
     var properties = c.VkPhysicalDeviceProperties{};
     c.vkGetPhysicalDeviceProperties(physical_devices[highestScoreIndex], &properties);
-    std.log.info("Selecting physical device with name {s}", .{properties.deviceName});
+    std.log.info("Selecting physical device with name {s}", .{std.mem.sliceTo(&properties.deviceName, 0)});
 
     defer std.log.info("Trying to select vulkan physical device OK", .{});
 
@@ -825,7 +825,7 @@ pub fn findPresentQueueIndex(
 fn getSupportedVkDeviceLayers(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
-) !std.ArrayList([*:0] const u8) {
+) !std.ArrayList([*:0]const u8) {
     std.log.debug("Trying to enumerate supported vulkan device layers...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan device layers failed", .{});
 
@@ -837,7 +837,7 @@ fn getSupportedVkDeviceLayers(
     defer allocator.free(layer_properties);
     try handleError(c.vkEnumerateDeviceLayerProperties(physical_device, &count, layer_properties.ptr));
 
-    var layers = try std.ArrayList([*:0] const u8).initCapacity(allocator, count);
+    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
     errdefer {
         for (layers.items) |ext| allocator.free(std.mem.span(ext));
         layers.deinit(allocator);
@@ -859,7 +859,7 @@ fn getSupportedVkDeviceLayers(
 fn checkRequestedVkDeviceLayersSupported(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
-    requested_layers: []const [*:0] const u8,
+    requested_layers: []const [*:0]const u8,
 ) !void {
     std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
@@ -893,7 +893,7 @@ fn checkRequestedVkDeviceLayersSupported(
 fn getSupportedVkDeviceExtensions(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
-) !std.ArrayList([*:0] const u8) {
+) !std.ArrayList([*:0]const u8) {
     std.log.debug("Trying to enumerate supported vulkan device extensions...", .{});
     errdefer std.log.err("Trying to enumerate supported vulkan device extensions failed", .{});
 
@@ -910,7 +910,7 @@ fn getSupportedVkDeviceExtensions(
         extension_properties.ptr,
     ));
 
-    var extensions = try std.ArrayList([*:0] const u8).initCapacity(allocator, count);
+    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
     for (extension_properties) |extension_property| {
         const name = std.mem.sliceTo(&extension_property.extensionName, 0);
         std.log.debug("Support exists for device extension '{s}'", .{name});
@@ -924,7 +924,7 @@ fn getSupportedVkDeviceExtensions(
 fn checkRequestedVkDeviceExtensionsSupported(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
-    requested_extensions: []const [*:0] const u8,
+    requested_extensions: []const [*:0]const u8,
 ) !void {
     std.log.debug("Trying to checking if requested vulkan device extensions are supported...", .{});
     errdefer std.log.err("Trying to checking if requested vulkan device extensions are supported failed", .{});
@@ -967,13 +967,13 @@ pub fn initVkDevice(
     errdefer std.log.err("Trying to init vulkan device failed", .{});
 
     // create our list of requested instance extensions
-    var extensions = try std.ArrayList([*:0] const u8).initCapacity(allocator, 0);
+    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     try checkRequestedVkDeviceExtensionsSupported(allocator, physical_device, extensions.items);
 
     // create our list of requested instance layers
-    var layers = try std.ArrayList([*:0] const u8).initCapacity(allocator, 0);
+    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
     try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
     try checkRequestedVkDeviceLayersSupported(allocator, physical_device, layers.items);
@@ -1045,7 +1045,7 @@ pub fn deinitVkDevice(device: c.VkDevice) void {
 }
 
 // =VkSwapchain========================================================================================================
-// The Swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed. 
+// The Swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed.
 // Provides the images that we draw on.
 
 pub fn initVkSwapchain(
@@ -1165,27 +1165,29 @@ pub fn initVkImageViews(
 
     const vkImageViews = try allocator.alloc(c.VkImageView, vkImages.len);
     for (0..vkImages.len) |i| {
-        try handleError(c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .image = vkImages[i],
-            .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
-            .format = surface_format.format,
-            .components = c.VkComponentMapping{
-                .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresourceRange = c.VkImageSubresourceRange{
-                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        }, null, &vkImageViews[i]));
+        try handleError(
+            c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .image = vkImages[i],
+                .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+                .format = surface_format.format,
+                .components = c.VkComponentMapping{
+                    .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+                .subresourceRange = c.VkImageSubresourceRange{
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            }, null, &vkImageViews[i]),
+        );
     }
 
     defer std.log.info("Trying to get image views OK", .{});
@@ -1212,13 +1214,15 @@ pub fn initVkShaderModule(comptime path: anytype, device: c.VkDevice) !c.VkShade
 
     const code align(@alignOf(u32)) = @embedFile(path).*;
 
-    try handleError(c.vkCreateShaderModule(device, &c.VkShaderModuleCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .codeSize = code.len,
-        .pCode = std.mem.bytesAsSlice(u32, &code).ptr,
-    }, null, &shader_module));
+    try handleError(
+        c.vkCreateShaderModule(device, &c.VkShaderModuleCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = code.len,
+            .pCode = std.mem.bytesAsSlice(u32, &code).ptr,
+        }, null, &shader_module),
+    );
 
     defer std.log.info("Trying to init shader module with path '{s}' OK", .{path});
     return shader_module;
@@ -1244,53 +1248,55 @@ pub fn initVkRenderPass(
     std.log.info("Trying to init render pass...", .{});
     errdefer std.log.info("Trying to init render pass failed", .{});
 
-    try handleError(c.vkCreateRenderPass(device, &c.VkRenderPassCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = null,
-        .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &[_]c.VkAttachmentDescription{
-            c.VkAttachmentDescription{
-                .flags = 0,
-                .format = surface_format.format,
-                .samples = c.VK_SAMPLE_COUNT_1_BIT,
-                .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            },
-        },
-        .subpassCount = 1,
-        .pSubpasses = &[_]c.VkSubpassDescription{
-            c.VkSubpassDescription{
-                .flags = 0,
-                .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                .inputAttachmentCount = 0,
-                .pInputAttachments = null,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &c.VkAttachmentReference{
-                    .attachment = 0,
-                    .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    try handleError(
+        c.vkCreateRenderPass(device, &c.VkRenderPassCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .attachmentCount = 1,
+            .pAttachments = &[_]c.VkAttachmentDescription{
+                c.VkAttachmentDescription{
+                    .flags = 0,
+                    .format = surface_format.format,
+                    .samples = c.VK_SAMPLE_COUNT_1_BIT,
+                    .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+                    .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                    .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 },
-                .pResolveAttachments = null,
-                .pDepthStencilAttachment = null,
-                .preserveAttachmentCount = 0,
-                .pPreserveAttachments = null,
             },
-        },
-        .dependencyCount = 1,
-        .pDependencies = &c.VkSubpassDependency{
-            .srcSubpass = c.VK_SUBPASS_EXTERNAL,
-            .dstSubpass = 0,
-            .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-            .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .dependencyFlags = 0,
-        },
-    }, null, &render_pass));
+            .subpassCount = 1,
+            .pSubpasses = &[_]c.VkSubpassDescription{
+                c.VkSubpassDescription{
+                    .flags = 0,
+                    .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    .inputAttachmentCount = 0,
+                    .pInputAttachments = null,
+                    .colorAttachmentCount = 1,
+                    .pColorAttachments = &c.VkAttachmentReference{
+                        .attachment = 0,
+                        .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    },
+                    .pResolveAttachments = null,
+                    .pDepthStencilAttachment = null,
+                    .preserveAttachmentCount = 0,
+                    .pPreserveAttachments = null,
+                },
+            },
+            .dependencyCount = 1,
+            .pDependencies = &c.VkSubpassDependency{
+                .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+                .dstSubpass = 0,
+                .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .dependencyFlags = 0,
+            },
+        }, null, &render_pass),
+    );
 
     defer std.log.info("Trying to init render pass...", .{});
     return render_pass;
@@ -1321,20 +1327,13 @@ pub fn initVkDescriptorSetLayout(
             .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .bindingCount = 2,
+            .bindingCount = 1,
             .pBindings = &[_]c.VkDescriptorSetLayoutBinding{
                 c.VkDescriptorSetLayoutBinding{
                     .binding = 0,
                     .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
                     .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .pImmutableSamplers = null,
-                },
-                c.VkDescriptorSetLayoutBinding{
-                    .binding = 1,
-                    .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .descriptorCount = 1,
-                    .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
                     .pImmutableSamplers = null,
                 },
             },
@@ -1396,7 +1395,6 @@ pub fn deinitVkPipelineLayout(
 
 pub fn initVkGraphicsPipeline(
     device: c.VkDevice,
-    vkSwapchainExtent: c.VkExtent2D,
     vkRenderPass: c.VkRenderPass,
     vkPipelineLayout: c.VkPipelineLayout,
     vkShaderModuleVert: c.VkShaderModule,
@@ -1461,23 +1459,9 @@ pub fn initVkGraphicsPipeline(
                 .pNext = null,
                 .flags = 0,
                 .viewportCount = 1,
-                // NOTE: negative viewport trick
-                .pViewports = &c.VkViewport{
-                    .x = 0,
-                    .y = 0,
-                    .width = @floatFromInt(vkSwapchainExtent.width),
-                    .height = @as(f32, @floatFromInt(vkSwapchainExtent.height)),
-                    .minDepth = 0,
-                    .maxDepth = 1,
-                },
+                .pViewports = null,
                 .scissorCount = 1,
-                .pScissors = &c.VkRect2D{
-                    .offset = c.VkOffset2D{
-                        .x = 0,
-                        .y = 0,
-                    },
-                    .extent = vkSwapchainExtent,
-                },
+                .pScissors = null,
             },
             .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -2144,7 +2128,7 @@ pub fn initVkDescriptorSets(
     vkDescriptorPool: c.VkDescriptorPool,
     vkUniformBuffers: []c.VkBuffer,
 ) ![]c.VkDescriptorSet {
-    var vkDescriptorSets: []c.VkDescriptorSet = undefined;
+    var descriptor_sets: []c.VkDescriptorSet = undefined;
 
     std.log.info("Trying to init descriptor sets...", .{});
     errdefer std.log.info("Trying to init descriptor sets failed", .{});
@@ -2155,14 +2139,14 @@ pub fn initVkDescriptorSets(
         layout.* = vkDescriptorSetLayout;
     }
 
-    vkDescriptorSets = try allocator.alloc(c.VkDescriptorSet, vkUniformBuffers.len);
+    descriptor_sets = try allocator.alloc(c.VkDescriptorSet, vkUniformBuffers.len);
     try handleError(c.vkAllocateDescriptorSets(device, &c.VkDescriptorSetAllocateInfo{
         .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = null,
         .descriptorPool = vkDescriptorPool,
         .descriptorSetCount = @intCast(vkUniformBuffers.len),
-        .pSetLayouts = @ptrCast(layouts),
-    }, @ptrCast(vkDescriptorSets)));
+        .pSetLayouts = layouts.ptr,
+    }, descriptor_sets.ptr));
 
     for (0..@intCast(vkUniformBuffers.len)) |i| {
         c.vkUpdateDescriptorSets(
@@ -2172,7 +2156,7 @@ pub fn initVkDescriptorSets(
                 c.VkWriteDescriptorSet{
                     .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .pNext = null,
-                    .dstSet = vkDescriptorSets[i],
+                    .dstSet = descriptor_sets[i],
                     .dstBinding = 0,
                     .dstArrayElement = 0,
                     .descriptorCount = 1,
@@ -2192,14 +2176,14 @@ pub fn initVkDescriptorSets(
     }
 
     defer std.log.info("Trying to init descriptor sets OK", .{});
-    return vkDescriptorSets;
+    return descriptor_sets;
 }
 
 pub fn deinitVkDescriptorSets(
     allocator: std.mem.Allocator,
-    vkDescriptorSets: []c.VkDescriptorSet,
+    descriptor_sets: []c.VkDescriptorSet,
 ) void {
-    allocator.free(vkDescriptorSets);
+    allocator.free(descriptor_sets);
 
     defer std.log.info("Deinit descriptor sets OK", .{});
 }

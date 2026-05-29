@@ -144,7 +144,6 @@ pub const App = struct {
         // =GraphicsPipeline===========================================================================================
         self.graphics_pipeline = try util.initVkGraphicsPipeline(
             self.device,
-            self.swap_extent,
             self.render_pass,
             self.pipeline_layout,
             self.vert_shader,
@@ -194,7 +193,7 @@ pub const App = struct {
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.vertex_buffer_set);
 
         // =Semaphores=================================================================================================
-        self.render_finished_semaphore = try util.initVkSemaphores(allocator, self.device, FRAMES_IN_FLIGHT);
+        self.render_finished_semaphore = try util.initVkSemaphores(allocator, self.device, self.images.len);
         errdefer util.deinitVkSemaphores(allocator, self.device, self.render_finished_semaphore);
 
         self.image_availible_semaphore = try util.initVkSemaphores(allocator, self.device, FRAMES_IN_FLIGHT);
@@ -214,7 +213,7 @@ pub const App = struct {
             self.descriptor_pool,
             self.uniform_buffer_set.vkUniformBuffers,
         );
-        errdefer util.deinitVkDescriptorSets(allocator, self.descrptor_sets);
+        errdefer util.deinitVkDescriptorSets(allocator, self.descriptor_sets);
 
         self.cube_pos = [_]f32{ 300, 300 };
         return self;
@@ -390,7 +389,7 @@ pub const App = struct {
                 .commandBufferCount = 1,
                 .pCommandBuffers = @ptrCast(&cmd),
                 .signalSemaphoreCount = 1,
-                .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[current_frame]),
+                .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
             };
 
             // Catch error here! If this fails, the app will panic immediately instead of generating un-signaled wait errors.
@@ -401,7 +400,7 @@ pub const App = struct {
                 .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .pNext = null,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[current_frame]),
+                .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
                 .swapchainCount = 1,
                 .pSwapchains = @ptrCast(&self.swapchain),
                 .pImageIndices = &image_index,
@@ -442,6 +441,7 @@ pub const App = struct {
 
         _ = c.vkDeviceWaitIdle(self.device);
 
+        util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
         util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
         util.deinitVkImageViews(self.allocator, self.device, self.image_views);
         util.deinitVkImages(self.allocator, self.images);
@@ -450,10 +450,20 @@ pub const App = struct {
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
         self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
 
-        self.swapchain = try util.initVkSwapchain(self.device, self.surface, self.surface_capabilities, self.surface_format, self.swap_extent, self.present_mode, self.graphics_queue_index, self.present_queue_index);
+        self.swapchain = try util.initVkSwapchain(
+            self.device,
+            self.surface,
+            self.surface_capabilities,
+            self.surface_format,
+            self.swap_extent,
+            self.present_mode,
+            self.graphics_queue_index,
+            self.present_queue_index,
+        );
         self.images = try util.initVkImages(self.allocator, self.device, self.swapchain);
         self.image_views = try util.initVkImageViews(self.allocator, self.device, self.images, self.surface_format);
         self.framebuffers = try util.initFramebuffers(self.allocator, self.device, self.image_views, self.render_pass, self.swap_extent);
+        self.render_finished_semaphore = try util.initVkSemaphores(self.allocator, self.device, self.images.len);
         defer std.log.info("Recreating swapchain OK", .{});
     }
 
