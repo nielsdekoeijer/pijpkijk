@@ -7,17 +7,6 @@ const types = @import("types.zig");
 
 pub const FRAMES_IN_FLIGHT = 2;
 
-const rect_verts = [_]types.Vertex{
-    // Triangle 1
-    .{ .pos = .{ 100.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 100.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 300.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    // Triangle 2
-    .{ .pos = .{ 300.0, 100.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 100.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 300.0, 300.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
-};
-
 pub const App = struct {
     window: *c.struct_SDL_Window,
     instance: c.VkInstance,
@@ -54,7 +43,8 @@ pub const App = struct {
     present_queue: c.VkQueue,
 
     // TEMP
-    cube_pos: [2]f32,
+    camera_pos: [2]f32,
+    scale: f32,
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -215,7 +205,8 @@ pub const App = struct {
         );
         errdefer util.deinitVkDescriptorSets(allocator, self.descriptor_sets);
 
-        self.cube_pos = [_]f32{ 300, 300 };
+        self.camera_pos = [_]f32{ -100, -100 };
+        self.scale = 1.0;
         return self;
     }
 
@@ -240,35 +231,43 @@ pub const App = struct {
                         window_resized = true;
                     },
                     c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                        std.log.debug("Mouse button down: ({}, {})", .{ e.button.x, e.button.y });
+                        std.log.debug("Mouse button down: ({}, {})", .{
+                            self.camera_pos[0] + e.button.x,
+                            self.camera_pos[1] + e.button.y,
+                        });
                         key_down_x = e.button.x;
                         key_down_y = e.button.y;
                     },
                     c.SDL_EVENT_MOUSE_BUTTON_UP => {
-                        std.log.debug("Mouse button lift: ({}, {})", .{ e.button.x, e.button.y });
+                        std.log.debug("Mouse button lift: ({}, {})", .{
+                            self.camera_pos[0] + e.button.x,
+                            self.camera_pos[1] + e.button.y,
+                        });
                         key_down_x = null;
                         key_down_y = null;
                     },
                     c.SDL_EVENT_MOUSE_MOTION => {
                         if (key_down_x) |x| {
-                            self.cube_pos[0] += e.button.x - x;
+                            self.camera_pos[0] -= e.button.x - x;
                             key_down_x = e.button.x;
                         }
 
                         if (key_down_y) |y| {
-                            self.cube_pos[1] += e.button.y - y;
+                            self.camera_pos[1] -= e.button.y - y;
                             key_down_y = e.button.y;
                         }
                     },
                     c.SDL_EVENT_KEY_DOWN => {
                         const move_speed = 10.0;
+                        const zoom_speed = 0.1;
                         switch (e.key.key) {
                             c.SDLK_ESCAPE => running = false,
-                            c.SDLK_Q => running = false,
-                            c.SDLK_W => self.cube_pos[1] += move_speed,
-                            c.SDLK_S => self.cube_pos[1] -= move_speed,
-                            c.SDLK_A => self.cube_pos[0] -= move_speed,
-                            c.SDLK_D => self.cube_pos[0] += move_speed,
+                            c.SDLK_Q => self.scale -= zoom_speed, // Zoom Out
+                            c.SDLK_E => self.scale += zoom_speed,
+                            c.SDLK_W => self.camera_pos[1] -= move_speed, // Camera Up
+                            c.SDLK_S => self.camera_pos[1] += move_speed, // Camera Down
+                            c.SDLK_A => self.camera_pos[0] -= move_speed, // Camera Left
+                            c.SDLK_D => self.camera_pos[0] += move_speed, // Camera Right
                             else => {},
                         }
                     },
@@ -308,19 +307,68 @@ pub const App = struct {
             try handleError(c.vkResetFences(self.device, 1, &self.in_flight_fences[current_frame]));
 
             // Update Memory Mapped Buffers (Vertex + Uniform)
+            const nodes = [_]types.Node{
+                .{
+                    .name = "A",
+                    .inps = &[_]types.Pin{
+                        .{
+                            .name = "inp-0",
+                        },
+                        .{
+                            .name = "inp-1",
+                        },
+                    },
+                    .outs = &[_]types.Pin{
+                        .{
+                            .name = "out-0",
+                        },
+                    },
+                    .x = 0,
+                    .y = 0,
+                },
+                .{
+                    .name = "B",
+                    .inps = &[_]types.Pin{
+                        .{
+                            .name = "inp-0",
+                        },
+                    },
+                    .outs = &[_]types.Pin{
+                        .{
+                            .name = "out-0",
+                        },
+                        .{
+                            .name = "out-1",
+                        },
+                    },
+                    .x = 500,
+                    .y = 300,
+                },
+            };
+
+            var vertices = try std.ArrayList(types.Vertex).initCapacity(self.allocator, 0);
+            defer vertices.deinit(self.allocator);
+            for (nodes) |node| {
+                try node.appendVerticesNode(self.allocator, &vertices);
+            }
+            for (nodes) |node| {
+                try node.appendVerticesPins(self.allocator, &vertices);
+            }
+
             const vert_map: [*]types.Vertex = @ptrCast(@alignCast(self.vertex_buffer_set.vkBuffersMapped[current_frame]));
-            @memcpy(vert_map[0..6], &rect_verts);
+            @memcpy(vert_map[0..vertices.items.len], vertices.items);
 
             // In step 3 (Update Memory Mapped Buffers)
             const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
             uniform_map[0] = .{
                 .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
-                .cube_pos = self.cube_pos,
+                .camera_pos = self.camera_pos,
+                .scale = self.scale,
             };
 
             // Record Command Buffer
             const cmd = self.command_buffers[current_frame];
-            try handleError(c.vkResetCommandBuffer(cmd, 0)); // Catch error here!
+            try handleError(c.vkResetCommandBuffer(cmd, 0)); 
 
             const begin_info = c.VkCommandBufferBeginInfo{
                 .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -328,7 +376,7 @@ pub const App = struct {
                 .flags = 0,
                 .pInheritanceInfo = null,
             };
-            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info)); // Catch error here!
+            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info)); 
 
             const clear_value = c.VkClearValue{ .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } } };
             const render_pass_info = c.VkRenderPassBeginInfo{
@@ -374,7 +422,7 @@ pub const App = struct {
             };
             c.vkCmdSetScissor(cmd, 0, 1, @ptrCast(&scissor));
 
-            c.vkCmdDraw(cmd, 6, 1, 0, 0);
+            c.vkCmdDraw(cmd, @intCast(vertices.items.len), 1, 0, 0);
             c.vkCmdEndRenderPass(cmd);
             try handleError(c.vkEndCommandBuffer(cmd)); // Catch error here!
 

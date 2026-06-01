@@ -4,7 +4,7 @@ const Vertex = @import("types.zig").Vertex;
 const Uniform = @import("types.zig").Uniform;
 const handleError = @import("error.zig").handleError;
 
-// =SDL3Initialization=================================================================================================
+// =SDL3===============================================================================================================
 
 /// Helper function to initialize SDL3 with the given flags
 pub fn sdlInit(options: struct {
@@ -26,8 +26,6 @@ pub fn sdlQuit() void {
 
     defer std.log.info("Deinit SDL3 OK", .{});
 }
-
-// =SDL3Window=========================================================================================================
 
 /// Helper function to initialize SDL3 window given some options
 pub fn sdlInitWindow(options: struct {
@@ -60,7 +58,9 @@ pub fn sdlDestroyWindow(window: *c.SDL_Window) void {
     defer std.log.info("Deinit SDL3 window OK", .{});
 }
 
-// =ValidationLayers===================================================================================================
+// =VkInstance=========================================================================================================
+// Creating a vulkan instance, where we are essentially registering ourselves with the vulkan libraries on the system.
+// To do this, we must specify what features we wish to use and information about our application
 
 /// Debug callback injectable into vulkan
 pub export fn vkDebugCallback(
@@ -76,8 +76,6 @@ pub export fn vkDebugCallback(
     std.log.debug("\x1b[1m[validation layer]\x1b[0m {s}", .{std.mem.span(callback_data.*.pMessage)});
     return @as(c.VkBool32, 0);
 }
-
-// =VkInstanceExtensions===============================================================================================
 
 /// Creates an arraylist of the vulkan extensions requested by SDL3
 fn getSDLRequestedVkInstanceExtensions(
@@ -170,8 +168,6 @@ fn checkRequestedVkInstanceExtensionsSupported(
     defer std.log.debug("Trying to checking if requested vulkan instance extensions are supported OK", .{});
 }
 
-// =VkInstanceLayers===================================================================================================
-
 /// Creates an arraylist of all supported instance layers
 fn getSupportedVkInstanceLayers(
     allocator: std.mem.Allocator,
@@ -238,8 +234,6 @@ fn checkRequestedVkInstanceLayersSupported(
     defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
 }
 
-// =VkInstance=========================================================================================================
-
 /// Initialize vulkan instance
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
@@ -249,14 +243,14 @@ pub fn initVkInstance(
     std.log.info("Trying to init vulkan instance...", .{});
     errdefer std.log.err("Trying to init vulkan instance failed", .{});
 
-    // create our list of requested instance extensions
+    // create our list of requested instance extensions, which specifies non-standard features we wish to use
     var extensions = try getSDLRequestedVkInstanceExtensions(allocator);
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     try extensions.append(allocator, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     try checkRequestedVkInstanceExtensionsSupported(allocator, extensions.items);
 
-    // create our list of requested instance layers
+    // create our list of requested instance layers, which can provide us debug information
     var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
     try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
@@ -328,6 +322,7 @@ pub fn deinitVkInstance(
 }
 
 // =VkSurface==========================================================================================================
+// The surface is the thing we draw onto.
 
 /// Initialize vulkan surface from SDL3
 pub fn initVkSurface(
@@ -357,6 +352,7 @@ pub fn deinitVkSurface(
 }
 
 // =VkPhysicalDevice===================================================================================================
+// This selects the specific gpu we want to use
 
 /// Initialize a vulkan physical device
 pub fn initVkPhysicalDevice(
@@ -467,12 +463,14 @@ pub fn initVkPhysicalDevice(
         var hasPresentSupport = false;
         for (0..queue_family_properties.len) |j| {
             var vkBoolHasPresentSupport: c.VkBool32 = 0;
-            try handleError(c.vkGetPhysicalDeviceSurfaceSupportKHR(
-                physical_devices[i],
-                @intCast(j),
-                surface,
-                &vkBoolHasPresentSupport,
-            ));
+            try handleError(
+                c.vkGetPhysicalDeviceSurfaceSupportKHR(
+                    physical_devices[i],
+                    @intCast(j),
+                    surface,
+                    &vkBoolHasPresentSupport,
+                ),
+            );
 
             if (vkBoolHasPresentSupport > 0) {
                 hasPresentSupport = true;
@@ -515,6 +513,8 @@ pub fn initVkPhysicalDevice(
 }
 
 // =VkSurfaceCapabilities==============================================================================================
+// This function takes the specified VkPhysicalDevice and VkSurfaceKHR window surface into account when determining
+// the supported capabilities.
 
 /// Gets a vulkan extent containing the surface dimensions from an SDL window
 pub fn getVkExtentFromSDLWindow(
@@ -581,7 +581,7 @@ pub fn getPhysicalDeviceSurfaceCapabilities(
 // The Surface Format (VkSurfaceFormatKHR) dictates exactly how color data is stored in memory and how the monitor
 // should interpret that data.
 
-/// Get a list of surface formats supported by our physical devices
+/// Get a list of surface formats supported by our physical device
 fn getSupportedVkDeviceSurfaceFormats(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -733,6 +733,8 @@ pub fn getPreferredVkPresentMode(
 }
 
 // =VkQueueFamilies====================================================================================================
+// In vulkan, if we want to interact with the physical device, it is done so through queues. We essentially submit
+// commands to queues.
 
 fn getQueueFamilyProperties(
     allocator: std.mem.Allocator,
@@ -821,6 +823,8 @@ pub fn findPresentQueueIndex(
 }
 
 // =VkDevice===========================================================================================================
+// This is the logical device which we use to interface with the physical device. It describes the features we want to
+// use from the physical device.
 
 fn getSupportedVkDeviceLayers(
     allocator: std.mem.Allocator,
@@ -1045,7 +1049,7 @@ pub fn deinitVkDevice(device: c.VkDevice) void {
 }
 
 // =VkSwapchain========================================================================================================
-// The Swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed.
+// The swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed.
 // Provides the images that we draw on.
 
 pub fn initVkSwapchain(
@@ -1116,28 +1120,28 @@ pub fn initVkSwapchain(
 
 pub fn deinitVkSwapchain(
     device: c.VkDevice,
-    vkSwapchain: c.VkSwapchainKHR,
+    swapchain: c.VkSwapchainKHR,
 ) void {
-    c.vkDestroySwapchainKHR(device, vkSwapchain, null);
+    c.vkDestroySwapchainKHR(device, swapchain, null);
     defer std.log.info("Deinit vulkan swapchain OK", .{});
 }
 
 // =VkImages===========================================================================================================
-// Images are that which we draw on.
+// Images are that which we draw on, an image view references a specific part of an image to be used
 
 /// Memory of the image inside the swapchain
 pub fn initVkImages(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
-    vkSwapchain: c.VkSwapchainKHR,
+    swapchain: c.VkSwapchainKHR,
 ) ![]c.VkImage {
     std.log.info("Trying to get images...", .{});
     errdefer std.log.info("Trying to get images failed", .{});
 
-    var count: u32 = 0;
-    try handleError(c.vkGetSwapchainImagesKHR(device, vkSwapchain, &count, null));
+    var count: u32 = undefined;
+    try handleError(c.vkGetSwapchainImagesKHR(device, swapchain, &count, null));
     const images = try allocator.alloc(c.VkImage, count);
-    try handleError(c.vkGetSwapchainImagesKHR(device, vkSwapchain, &count, images.ptr));
+    try handleError(c.vkGetSwapchainImagesKHR(device, swapchain, &count, images.ptr));
 
     std.log.info("Acquired {} images", .{count});
 
@@ -1147,9 +1151,9 @@ pub fn initVkImages(
 
 pub fn deinitVkImages(
     allocator: std.mem.Allocator,
-    vkImages: []c.VkImage,
+    images: []c.VkImage,
 ) void {
-    defer allocator.free(vkImages);
+    defer allocator.free(images);
 
     defer std.log.info("Deinit images OK", .{});
 }
@@ -1157,20 +1161,20 @@ pub fn deinitVkImages(
 pub fn initVkImageViews(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
-    vkImages: []c.VkImage,
+    images: []c.VkImage,
     surface_format: c.VkSurfaceFormatKHR,
 ) ![]c.VkImageView {
     std.log.info("Trying to get image views...", .{});
     errdefer std.log.info("Trying to get image views failed", .{});
 
-    const vkImageViews = try allocator.alloc(c.VkImageView, vkImages.len);
-    for (0..vkImages.len) |i| {
+    const vkImageViews = try allocator.alloc(c.VkImageView, images.len);
+    for (0..images.len) |i| {
         try handleError(
             c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .image = vkImages[i],
+                .image = images[i],
                 .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
                 .format = surface_format.format,
                 .components = c.VkComponentMapping{
@@ -1237,7 +1241,8 @@ pub fn deinitVkShaderModule(
     defer std.log.info("Deinit vulkan shader module OK", .{});
 }
 
-// =VkGraphicsPipeline=================================================================================================
+// =VkRenderPass=======================================================================================================
+// Render passes in Vulkan describe the type of images that are used during rendering operations,
 
 pub fn initVkRenderPass(
     device: c.VkDevice,
@@ -1352,6 +1357,8 @@ pub fn deinitVkDescriptorSetLayout(device: c.VkDevice, vkDescriptorSetLayout: c.
 }
 
 // =VkPipeline=========================================================================================================
+// Describes the configurable state of the graphics card, like the viewport size and depth buffer operation and the
+// programmable state using shaders.
 
 pub fn initVkPipelineLayout(
     device: c.VkDevice,
@@ -1511,12 +1518,12 @@ pub fn initVkGraphicsPipeline(
                 .logicOp = c.VK_LOGIC_OP_COPY,
                 .attachmentCount = 1,
                 .pAttachments = &c.VkPipelineColorBlendAttachmentState{
-                    .blendEnable = c.VK_FALSE,
-                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_ONE,
-                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+                    .blendEnable = c.VK_TRUE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                     .colorBlendOp = c.VK_BLEND_OP_ADD,
                     .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
-                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                     .alphaBlendOp = c.VK_BLEND_OP_ADD,
                     .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | //
                         c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
@@ -1553,13 +1560,14 @@ pub fn deinitVkPipeline(device: c.VkDevice, vkPipeline: c.VkPipeline) void {
 }
 
 // =FrameBuffers=======================================================================================================
+//  The framebuffer references image views that are to be used for color, depth and stencil targets
 
 pub fn initFramebuffers(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
     vkImageViews: []c.VkImageView,
     vkRenderPass: c.VkRenderPass,
-    vkSwapchainExtent: c.VkExtent2D,
+    swapchainExtent: c.VkExtent2D,
 ) ![]c.VkFramebuffer {
     std.log.info("Trying to init framebuffers...", .{});
     errdefer std.log.info("Trying to init framebuffers failed", .{});
@@ -1578,8 +1586,8 @@ pub fn initFramebuffers(
                 .pAttachments = &[_]c.VkImageView{
                     vkImageViews[i],
                 },
-                .width = vkSwapchainExtent.width,
-                .height = vkSwapchainExtent.height,
+                .width = swapchainExtent.width,
+                .height = swapchainExtent.height,
                 .layers = 1,
             },
             null,
@@ -1606,6 +1614,8 @@ pub fn deinitFramebuffers(
 }
 
 // =CommandBuffers=====================================================================================================
+// Operations in Vulkan that we want to execute, like drawing operations, need to be submitted to a queue. These
+// operations first need to be recorded into a VkCommandBuffer before they can be submitted.
 
 pub fn initCommandPool(
     device: c.VkDevice,
@@ -1674,8 +1684,6 @@ pub fn deinitCommandBuffers(
     allocator.free(vkCommandBuffers);
     defer std.log.info("Trying to free command buffer OK", .{});
 }
-
-// =Buffers============================================================================================================
 
 pub fn begOneTimeCommand(
     device: c.VkDevice,
