@@ -1,6 +1,7 @@
 const c = @import("c.zig").c;
 const std = @import("std");
-const Vertex = @import("types.zig").Vertex;
+const QuadVertex = @import("types.zig").QuadVertex;
+const BezierVertex = @import("types.zig").BezierVertex;
 const Uniform = @import("types.zig").Uniform;
 const handleError = @import("error.zig").handleError;
 
@@ -1377,12 +1378,8 @@ pub fn initVkPipelineLayout(
             .flags = 0,
             .setLayoutCount = 1,
             .pSetLayouts = &vkDescriptorSetLayout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &c.VkPushConstantRange{
-                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
-                .offset = 0,
-                .size = 8, //TODO: @sizeOf(Mat4),
-            },
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
         },
         null,
         &vkPipelineLayout,
@@ -1400,7 +1397,7 @@ pub fn deinitVkPipelineLayout(
     defer std.log.info("Deinit vulkan pipeline layout OK", .{});
 }
 
-pub fn initVkGraphicsPipeline(
+pub fn initQuadVertexVkGraphicsPipeline(
     device: c.VkDevice,
     vkRenderPass: c.VkRenderPass,
     vkPipelineLayout: c.VkPipelineLayout,
@@ -1413,8 +1410,164 @@ pub fn initVkGraphicsPipeline(
     errdefer std.log.info("Trying to init graphics pipeline failed", .{});
 
     //
-    const vertex_bind = Vertex.getVkBindingDiscription();
-    const vertex_attr = Vertex.getVkAttributeDiscription();
+    const vertex_bind = QuadVertex.getVkBindingDiscription();
+    const vertex_attr = QuadVertex.getVkAttributeDiscription();
+
+    try handleError(c.vkCreateGraphicsPipelines(
+        device,
+        null,
+        1,
+        &c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &[_]c.VkPipelineShaderStageCreateInfo{
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vkShaderModuleVert,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = vkShaderModuleFrag,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            },
+            .pVertexInputState = &c.VkPipelineVertexInputStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .vertexBindingDescriptionCount = vertex_bind.len,
+                .pVertexBindingDescriptions = &vertex_bind,
+                .vertexAttributeDescriptionCount = vertex_attr.len,
+                .pVertexAttributeDescriptions = &vertex_attr,
+            },
+            .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                .primitiveRestartEnable = c.VK_FALSE,
+            },
+            .pTessellationState = null,
+            .pViewportState = &c.VkPipelineViewportStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .viewportCount = 1,
+                .pViewports = null,
+                .scissorCount = 1,
+                .pScissors = null,
+            },
+            .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthClampEnable = c.VK_FALSE,
+                .rasterizerDiscardEnable = 0.0,
+                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .cullMode = c.VK_CULL_MODE_NONE,
+                .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                .depthBiasEnable = c.VK_FALSE,
+                .depthBiasConstantFactor = 0.0,
+                .depthBiasClamp = 0.0,
+                .depthBiasSlopeFactor = 0.0,
+                .lineWidth = 1.0,
+            },
+            .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+                .sampleShadingEnable = c.VK_FALSE,
+                .minSampleShading = 1.0,
+                .pSampleMask = null,
+                .alphaToCoverageEnable = c.VK_FALSE,
+                .alphaToOneEnable = c.VK_FALSE,
+            },
+            .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthTestEnable = c.VK_FALSE,
+                .depthWriteEnable = c.VK_FALSE,
+                .depthCompareOp = c.VK_COMPARE_OP_LESS,
+                .depthBoundsTestEnable = c.VK_FALSE,
+                .stencilTestEnable = c.VK_FALSE,
+                .front = .{},
+                .back = .{},
+                .minDepthBounds = 0,
+                .maxDepthBounds = 1,
+            },
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .logicOpEnable = c.VK_FALSE,
+                .logicOp = c.VK_LOGIC_OP_COPY,
+                .attachmentCount = 1,
+                .pAttachments = &c.VkPipelineColorBlendAttachmentState{
+                    .blendEnable = c.VK_TRUE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .colorBlendOp = c.VK_BLEND_OP_ADD,
+                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .alphaBlendOp = c.VK_BLEND_OP_ADD,
+                    .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | //
+                        c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+                },
+                .blendConstants = [4]f32{ 0, 0, 0, 0 },
+            },
+            .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .dynamicStateCount = 2,
+                .pDynamicStates = &[_]c.VkDynamicState{
+                    c.VK_DYNAMIC_STATE_VIEWPORT,
+                    c.VK_DYNAMIC_STATE_SCISSOR,
+                },
+            },
+            .layout = vkPipelineLayout,
+            .renderPass = vkRenderPass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        },
+        null,
+        &vkGraphicsPipeline,
+    ));
+
+    defer std.log.info("Trying to init graphics pipeline...", .{});
+    return vkGraphicsPipeline;
+}
+
+pub fn initBezierVertexVkGraphicsPipeline(
+    device: c.VkDevice,
+    vkRenderPass: c.VkRenderPass,
+    vkPipelineLayout: c.VkPipelineLayout,
+    vkShaderModuleVert: c.VkShaderModule,
+    vkShaderModuleFrag: c.VkShaderModule,
+) !c.VkPipeline {
+    var vkGraphicsPipeline: c.VkPipeline = undefined;
+
+    std.log.info("Trying to init graphics pipeline...", .{});
+    errdefer std.log.info("Trying to init graphics pipeline failed", .{});
+
+    //
+    const vertex_bind = BezierVertex.getVkBindingDiscription();
+    const vertex_attr = BezierVertex.getVkAttributeDiscription();
+
     try handleError(c.vkCreateGraphicsPipelines(
         device,
         null,
@@ -1833,7 +1986,7 @@ fn deinitBuffer(
     defer std.log.info("Deinit vulkan buffer OK", .{});
 }
 
-// =VertexBufferSet===================================================================================================
+// =QuadVertexBufferSet===================================================================================================
 
 pub const VertexBufferSet = struct {
     vkBuffers: []c.VkBuffer,
@@ -1843,6 +1996,7 @@ pub const VertexBufferSet = struct {
 };
 
 pub fn initVertexBufferSet(
+    T: type, 
     allocator: std.mem.Allocator,
     device: c.VkDevice,
     physical_device: c.VkPhysicalDevice,
@@ -1858,7 +2012,7 @@ pub fn initVertexBufferSet(
     vertex_buffer_set.vkBuffersMemory = try allocator.alloc(c.VkDeviceMemory, bufferCount);
     vertex_buffer_set.vkBuffersMapped = try allocator.alloc(*anyopaque, bufferCount);
 
-    const buffer_size = @sizeOf(Vertex) * max_vertices;
+    const buffer_size = @sizeOf(T) * max_vertices;
 
     for (0..bufferCount) |i| {
         try initBuffer(

@@ -35,8 +35,8 @@ pub const Uniform = extern struct {
     _: u32 = 0,
 };
 
-/// Vertex buffer
-pub const Vertex = extern struct {
+/// QuadVertex buffer
+pub const QuadVertex = extern struct {
     pos: [2]f32,
     color: [4]f32,
     local_pos: [2]f32,
@@ -47,7 +47,7 @@ pub const Vertex = extern struct {
         return [_]c.VkVertexInputBindingDescription{
             .{
                 .binding = 0,
-                .stride = @sizeOf(Vertex),
+                .stride = @sizeOf(QuadVertex),
                 .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
             },
         };
@@ -55,40 +55,95 @@ pub const Vertex = extern struct {
 
     pub fn getVkAttributeDiscription() [5]c.VkVertexInputAttributeDescription {
         return [_]c.VkVertexInputAttributeDescription{
-            // Location 0: Position (float2)
             .{
                 .location = 0,
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32_SFLOAT,
-                .offset = @offsetOf(Vertex, "pos"),
+                .offset = @offsetOf(QuadVertex, "pos"),
             },
-            // Location 1: Color (float4)
             .{
                 .location = 1,
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = @offsetOf(Vertex, "color"),
+                .offset = @offsetOf(QuadVertex, "color"),
             },
-            // Location 2: Local Position (float2)
             .{
                 .location = 2,
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32_SFLOAT,
-                .offset = @offsetOf(Vertex, "local_pos"),
+                .offset = @offsetOf(QuadVertex, "local_pos"),
             },
-            // Location 3: Half Size (float2)
             .{
                 .location = 3,
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32_SFLOAT,
-                .offset = @offsetOf(Vertex, "half_size"),
+                .offset = @offsetOf(QuadVertex, "half_size"),
             },
-            // Location 4: Radii (float4)
             .{
                 .location = 4,
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = @offsetOf(Vertex, "radii"),
+                .offset = @offsetOf(QuadVertex, "radii"),
+            },
+        };
+    }
+};
+
+/// BezierVertex buffer
+pub const BezierVertex = extern struct {
+    pos: [2]f32, 
+    p0: [2]f32, 
+    p1: [2]f32, 
+    p2: [2]f32, 
+    p3: [2]f32, 
+    thickness: f32,
+    color: [4]f32,
+
+    pub fn getVkBindingDiscription() [1]c.VkVertexInputBindingDescription {
+        return [_]c.VkVertexInputBindingDescription{.{
+            .binding = 0,
+            .stride = @sizeOf(BezierVertex),
+            .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+        }};
+    }
+
+    pub fn getVkAttributeDiscription() [6]c.VkVertexInputAttributeDescription {
+        return [_]c.VkVertexInputAttributeDescription{
+            .{
+                .location = 0,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "pos"),
+            },
+            .{
+                .location = 1,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "p0"),
+            },
+            .{
+                .location = 2,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "p1"),
+            },
+            .{
+                .location = 3,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "p2"),
+            },
+            .{
+                .location = 4,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "p3"),
+            },
+            .{
+                .location = 5,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "color"),
             },
         };
     }
@@ -136,7 +191,7 @@ pub const Node = struct {
     /// Helper function to append a quad of a solid color to an ArrayList of vertices
     fn appendQuad(
         allocator: std.mem.Allocator,
-        list: *std.ArrayList(Vertex),
+        list: *std.ArrayList(QuadVertex),
         x: f32,
         y: f32,
         w: f32,
@@ -204,12 +259,12 @@ pub const Node = struct {
         return H_OFFSET_TITLE + (H_OFFSET_OUTER_PIN * @as(f32, @floatFromInt(member_count)));
     }
 
-    pub fn appendVerticesNode(self: Node, allocator: std.mem.Allocator, list: *std.ArrayList(Vertex)) !void {
+    pub fn appendVerticesNode(self: Node, allocator: std.mem.Allocator, list: *std.ArrayList(QuadVertex)) !void {
         const color: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
         try appendQuad(allocator, list, self.x, self.y, W_NODE, self.computeNodeHeight(), color, .{ 10.0, 10.0, 10.0, 10.0 });
     }
 
-    pub fn appendVerticesPins(self: Node, allocator: std.mem.Allocator, list: *std.ArrayList(Vertex)) !void {
+    pub fn appendVerticesPins(self: Node, allocator: std.mem.Allocator, list: *std.ArrayList(QuadVertex)) !void {
         const color: [4]f32 = .{ 1.0, 0.5, 0.0, 1.0 };
 
         {

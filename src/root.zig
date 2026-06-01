@@ -23,17 +23,21 @@ pub const App = struct {
     swapchain: c.VkSwapchainKHR,
     images: []c.VkImage,
     image_views: []c.VkImageView,
-    vert_shader: c.VkShaderModule,
-    frag_shader: c.VkShaderModule,
+    quad_vert_shader: c.VkShaderModule,
+    quad_frag_shader: c.VkShaderModule,
+    bezier_vert_shader: c.VkShaderModule,
+    bezier_frag_shader: c.VkShaderModule,
     render_pass: c.VkRenderPass,
     descriptor_set_layout: c.VkDescriptorSetLayout,
     pipeline_layout: c.VkPipelineLayout,
-    graphics_pipeline: c.VkPipeline,
+    quad_vertex_graphics_pipeline: c.VkPipeline,
+    bezier_vertex_graphics_pipeline: c.VkPipeline,
     framebuffers: []c.VkFramebuffer,
     command_pool: c.VkCommandPool,
     command_buffers: []c.VkCommandBuffer,
     uniform_buffer_set: util.UniformBufferSet,
-    vertex_buffer_set: util.VertexBufferSet,
+    quad_vertex_buffer_set: util.VertexBufferSet,
+    bezier_vertex_buffer_set: util.VertexBufferSet,
     image_availible_semaphore: []c.VkSemaphore,
     render_finished_semaphore: []c.VkSemaphore,
     in_flight_fences: []c.VkFence,
@@ -114,11 +118,17 @@ pub const App = struct {
         errdefer util.deinitVkImageViews(allocator, self.device, self.image_views);
 
         // =Shaders====================================================================================================
-        self.vert_shader = try util.initVkShaderModule("./shaders/triangle.vert.spirv", self.device);
-        errdefer util.deinitVkShaderModule(self.device, self.vert_shader);
+        self.quad_vert_shader = try util.initVkShaderModule("./shaders/quad.vert.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.quad_vert_shader);
 
-        self.frag_shader = try util.initVkShaderModule("./shaders/triangle.frag.spirv", self.device);
-        errdefer util.deinitVkShaderModule(self.device, self.frag_shader);
+        self.quad_frag_shader = try util.initVkShaderModule("./shaders/quad.frag.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.quad_frag_shader);
+
+        self.bezier_vert_shader = try util.initVkShaderModule("./shaders/bezier.vert.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.bezier_vert_shader);
+
+        self.bezier_frag_shader = try util.initVkShaderModule("./shaders/bezier.frag.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.bezier_frag_shader);
 
         // =RenderPass=================================================================================================
         self.render_pass = try util.initVkRenderPass(self.device, self.surface_format);
@@ -132,14 +142,23 @@ pub const App = struct {
         errdefer util.deinitVkPipelineLayout(self.device, self.pipeline_layout);
 
         // =GraphicsPipeline===========================================================================================
-        self.graphics_pipeline = try util.initVkGraphicsPipeline(
+        self.quad_vertex_graphics_pipeline = try util.initQuadVertexVkGraphicsPipeline(
             self.device,
             self.render_pass,
             self.pipeline_layout,
-            self.vert_shader,
-            self.frag_shader,
+            self.quad_vert_shader,
+            self.quad_frag_shader,
         );
-        errdefer util.deinitVkPipeline(self.device, self.graphics_pipeline);
+        errdefer util.deinitVkPipeline(self.device, self.quad_vertex_graphics_pipeline);
+
+        self.bezier_vertex_graphics_pipeline = try util.initBezierVertexVkGraphicsPipeline(
+            self.device,
+            self.render_pass,
+            self.pipeline_layout,
+            self.quad_vert_shader,
+            self.quad_frag_shader,
+        );
+        errdefer util.deinitVkPipeline(self.device, self.bezier_vertex_graphics_pipeline);
 
         // =FrameBuffers===============================================================================================
         self.framebuffers = try util.initFramebuffers(
@@ -172,15 +191,26 @@ pub const App = struct {
         );
         errdefer util.deinitUniformBufferSet(allocator, self.device, self.uniform_buffer_set);
 
-        // =VertexBuffers==============================================================================================
-        self.vertex_buffer_set = try util.initVertexBufferSet(
+        // =VertexBuffers==================================================================================================
+        self.quad_vertex_buffer_set = try util.initVertexBufferSet(
+            types.QuadVertex,
             allocator,
             self.device,
             self.physical_device,
             100,
             FRAMES_IN_FLIGHT,
         );
-        errdefer util.deinitVertexBufferSet(allocator, self.device, self.vertex_buffer_set);
+        errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
+
+        self.bezier_vertex_buffer_set = try util.initVertexBufferSet(
+            types.BezierVertex,
+            allocator,
+            self.device,
+            self.physical_device,
+            100,
+            FRAMES_IN_FLIGHT,
+        );
+        errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
 
         // =Semaphores=================================================================================================
         self.render_finished_semaphore = try util.initVkSemaphores(allocator, self.device, self.images.len);
@@ -306,7 +336,7 @@ pub const App = struct {
             // Only reset the fence once we know we are definitely submitting work
             try handleError(c.vkResetFences(self.device, 1, &self.in_flight_fences[current_frame]));
 
-            // Update Memory Mapped Buffers (Vertex + Uniform)
+            // Update Memory Mapped Buffers (QuadVertex + Uniform)
             const nodes = [_]types.Node{
                 .{
                     .name = "A",
@@ -346,7 +376,7 @@ pub const App = struct {
                 },
             };
 
-            var vertices = try std.ArrayList(types.Vertex).initCapacity(self.allocator, 0);
+            var vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
             defer vertices.deinit(self.allocator);
             for (nodes) |node| {
                 try node.appendVerticesNode(self.allocator, &vertices);
@@ -355,7 +385,7 @@ pub const App = struct {
                 try node.appendVerticesPins(self.allocator, &vertices);
             }
 
-            const vert_map: [*]types.Vertex = @ptrCast(@alignCast(self.vertex_buffer_set.vkBuffersMapped[current_frame]));
+            const vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
             @memcpy(vert_map[0..vertices.items.len], vertices.items);
 
             // In step 3 (Update Memory Mapped Buffers)
@@ -390,10 +420,10 @@ pub const App = struct {
             };
 
             c.vkCmdBeginRenderPass(cmd, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-            c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+            c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
 
             const offsets = [_]c.VkDeviceSize{0};
-            c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.vertex_buffer_set.vkBuffers[current_frame], &offsets);
+            c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
 
             c.vkCmdBindDescriptorSets(
                 cmd,
@@ -524,17 +554,21 @@ pub const App = struct {
         defer util.deinitVkSwapchain(self.device, self.swapchain);
         defer util.deinitVkImages(self.allocator, self.images);
         defer util.deinitVkImageViews(self.allocator, self.device, self.image_views);
-        defer util.deinitVkShaderModule(self.device, self.vert_shader);
-        defer util.deinitVkShaderModule(self.device, self.frag_shader);
+        defer util.deinitVkShaderModule(self.device, self.quad_vert_shader);
+        defer util.deinitVkShaderModule(self.device, self.quad_frag_shader);
+        defer util.deinitVkShaderModule(self.device, self.bezier_vert_shader);
+        defer util.deinitVkShaderModule(self.device, self.bezier_frag_shader);
         defer util.deinitVkRenderPass(self.device, self.render_pass);
         defer util.deinitVkDescriptorSetLayout(self.device, self.descriptor_set_layout);
         defer util.deinitVkPipelineLayout(self.device, self.pipeline_layout);
-        defer util.deinitVkPipeline(self.device, self.graphics_pipeline);
+        defer util.deinitVkPipeline(self.device, self.quad_vertex_graphics_pipeline);
+        defer util.deinitVkPipeline(self.device, self.bezier_vertex_graphics_pipeline);
         defer util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
         defer util.deinitCommandPool(self.device, self.command_pool);
         defer util.deinitCommandBuffers(self.allocator, self.command_buffers);
         defer util.deinitUniformBufferSet(self.allocator, self.device, self.uniform_buffer_set);
-        defer util.deinitVertexBufferSet(self.allocator, self.device, self.vertex_buffer_set);
+        defer util.deinitVertexBufferSet(self.allocator, self.device, self.quad_vertex_buffer_set);
+        defer util.deinitVertexBufferSet(self.allocator, self.device, self.bezier_vertex_buffer_set);
         defer util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
         defer util.deinitVkSemaphores(self.allocator, self.device, self.image_availible_semaphore);
         defer util.deinitVkFences(self.allocator, self.device, self.in_flight_fences);

@@ -41,8 +41,12 @@ pub fn build(b: *std.Build) void {
 
     const vert_shaders = .{
         .{
-            .slang_path = "src/shaders/triangle.vert.slang",
-            .spirv_path = "src/shaders/triangle.vert.spirv",
+            .slang_path = "src/shaders/quad.vert.slang",
+            .spirv_path = "src/shaders/quad.vert.spirv",
+        },
+        .{
+            .slang_path = "src/shaders/bezier.vert.slang",
+            .spirv_path = "src/shaders/bezier.vert.spirv",
         },
     };
 
@@ -56,8 +60,12 @@ pub fn build(b: *std.Build) void {
 
     const frag_shaders = .{
         .{
-            .slang_path = "src/shaders/triangle.frag.slang",
-            .spirv_path = "src/shaders/triangle.frag.spirv",
+            .slang_path = "src/shaders/quad.frag.slang",
+            .spirv_path = "src/shaders/quad.frag.spirv",
+        },
+        .{
+            .slang_path = "src/shaders/bezier.frag.slang",
+            .spirv_path = "src/shaders/bezier.frag.spirv",
         },
     };
 
