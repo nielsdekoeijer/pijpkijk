@@ -91,11 +91,11 @@ pub const QuadVertex = extern struct {
 
 /// BezierVertex buffer
 pub const BezierVertex = extern struct {
-    pos: [2]f32, 
-    p0: [2]f32, 
-    p1: [2]f32, 
-    p2: [2]f32, 
-    p3: [2]f32, 
+    pos: [2]f32,
+    p0: [2]f32,
+    p1: [2]f32,
+    p2: [2]f32,
+    p3: [2]f32,
     thickness: f32,
     color: [4]f32,
 
@@ -149,9 +149,21 @@ pub const BezierVertex = extern struct {
     }
 };
 
-/// Representation of a pin
-pub const Pin = struct {
+/// Representation of an input pin
+pub const InpPin = struct {
     name: []const u8,
+};
+
+/// Representation of an output pin
+pub const OutPin = struct {
+    name: []const u8,
+    connections: []const Connection,
+};
+
+/// Representation of a connection bewteen an output pin and an input pin
+pub const Connection = struct {
+    node: *Node,
+    inp_index: usize,
 };
 
 /// Representation of a node of our pipewire graph
@@ -160,10 +172,10 @@ pub const Node = struct {
     name: []const u8,
 
     /// Ordered list of inputs
-    inps: []const Pin,
+    inps: []const InpPin,
 
     /// Ordered list of outputs
-    outs: []const Pin,
+    outs: []const OutPin,
 
     /// X-coordinate of the upper-left corner of the node
     x: f32,
@@ -272,7 +284,8 @@ pub const Node = struct {
             const W_BEG: f32 = 0;
             for (self.inps, 0..self.inps.len) |pin, i| {
                 _ = pin;
-                const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
+                // const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
+                const burn = 1.0;
 
                 const px = W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
                 const py = H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
@@ -294,7 +307,8 @@ pub const Node = struct {
             const W_BEG: f32 = W_NODE - W_OFFSET_INNER_PIN * 2 - W_PIN;
             for (self.outs, 0..self.outs.len) |pin, i| {
                 _ = pin;
-                const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
+                // const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
+                const burn = 1.0;
 
                 const px = W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
                 const py = H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
@@ -308,6 +322,67 @@ pub const Node = struct {
                     .{ burn * color[0], burn * color[1], burn * color[2], color[3] },
                     .{ 0.0, 0.0, 2.5, 2.5 },
                 );
+            }
+        }
+    }
+
+    fn getInpPinX(self: *const Node, _: usize) f32 {
+        return self.x;
+    }
+
+    fn getOutPinX(self: *const Node, _: usize) f32 {
+        return self.x + W_NODE;
+    }
+
+    fn getInpPinY(self: *const Node, index: usize) f32 {
+        return self.y + H_OFFSET_TITLE + (@as(f32, @floatFromInt(index)) * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
+    }
+
+    fn getOutPinY(self: *const Node, index: usize) f32 {
+        return self.y + H_OFFSET_TITLE + (@as(f32, @floatFromInt(index)) * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
+    }
+
+    // In src/types.zig, inside the Node or a new relevant context:
+    pub fn appendVerticesBezier(
+        self: Node,
+        allocator: std.mem.Allocator,
+        list: *std.ArrayList(BezierVertex),
+        color: [4]f32,
+    ) !void {
+        for (self.outs, 0..) |out, i| {
+            for (out.connections) |connection| {
+                const p0 = [2]f32{ self.getOutPinX(i), self.getOutPinY(i) };
+                const p3 = [2]f32{ connection.node.getInpPinX(connection.inp_index), connection.node.getInpPinY(connection.inp_index) };
+
+                const mid_x = (p0[0] + p3[0]) / 2.0;
+
+                const p1 = [2]f32{ mid_x, p0[1] };
+                const p2 = [2]f32{ mid_x, p3[1] };
+
+                const min_x = @min(p0[0], @min(p3[0], @min(p1[0], p2[0])));
+                const max_x = @max(p0[0], @max(p3[0], @max(p1[0], p2[0])));
+                const min_y = @min(p0[1], @min(p3[1], @min(p1[1], p2[1])));
+                const max_y = @max(p0[1], @max(p3[1], @max(p1[1], p2[1])));
+
+                const thickness = 4.0;
+                const padding = 10.0;
+
+                const x = min_x - padding;
+                const y = min_y - padding;
+                const w = (max_x - min_x) + (padding * 2);
+                const h = (max_y - min_y) + (padding * 2);
+
+                const quad = [_]BezierVertex{
+                    .{ .pos = .{ x, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+
+                    .{ .pos = .{ x + w, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                };
+
+                try list.appendSlice(allocator, &quad);
             }
         }
     }

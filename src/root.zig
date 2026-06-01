@@ -155,8 +155,8 @@ pub const App = struct {
             self.device,
             self.render_pass,
             self.pipeline_layout,
-            self.quad_vert_shader,
-            self.quad_frag_shader,
+            self.bezier_vert_shader,
+            self.bezier_frag_shader,
         );
         errdefer util.deinitVkPipeline(self.device, self.bezier_vertex_graphics_pipeline);
 
@@ -197,7 +197,7 @@ pub const App = struct {
             allocator,
             self.device,
             self.physical_device,
-            100,
+            1000,
             FRAMES_IN_FLIGHT,
         );
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
@@ -207,7 +207,7 @@ pub const App = struct {
             allocator,
             self.device,
             self.physical_device,
-            100,
+            1000,
             FRAMES_IN_FLIGHT,
         );
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
@@ -251,6 +251,42 @@ pub const App = struct {
         var window_resized = false;
         var e: c.SDL_Event = undefined;
 
+        // 1. Initialize Node B with 5 input pins
+        var nodeB = types.Node{
+            .name = "B",
+            .inps = &[_]types.InpPin{
+                .{ .name = "in-0" }, .{ .name = "in-1" }, .{ .name = "in-2" }, .{ .name = "in-3" }, .{ .name = "in-4" },
+            },
+            .outs = &[_]types.OutPin{},
+            .x = 600,
+            .y = 300,
+        };
+
+        // 2. Define the cross-connections (A -> B)
+        const conn0 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 0 }};
+        const conn1 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 1 }};
+        const conn2 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 2 }};
+        const conn3 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 3 }};
+        const conn4 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 4 }};
+
+        // 3. Initialize Node A with 5 output pins pointing to B
+        const nodeA = types.Node{
+            .name = "A",
+            .inps = &.{},
+            .outs = &[_]types.OutPin{
+                .{ .name = "out-0", .connections = &conn0 },
+                .{ .name = "out-1", .connections = &conn1 },
+                .{ .name = "out-2", .connections = &conn2 },
+                .{ .name = "out-3", .connections = &conn3 },
+                .{ .name = "out-4", .connections = &conn4 },
+            },
+            .x = 50,
+            .y = 100,
+        };
+
+        const nodes = [_]types.Node{ nodeA, nodeB };
+
+        // Handle events
         while (running) {
             while (c.SDL_PollEvent(&e) != false) {
                 switch (e.type) {
@@ -261,10 +297,11 @@ pub const App = struct {
                         window_resized = true;
                     },
                     c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                        std.log.debug("Mouse button down: ({}, {})", .{
-                            self.camera_pos[0] + e.button.x,
-                            self.camera_pos[1] + e.button.y,
-                        });
+                        const world_x = (e.button.x / self.scale) + self.camera_pos[0];
+                        const world_y = (e.button.y / self.scale) + self.camera_pos[1];
+
+                        std.log.debug("Mouse button down (World): ({d}, {d})", .{ world_x, world_y });
+
                         key_down_x = e.button.x;
                         key_down_y = e.button.y;
                     },
@@ -288,16 +325,16 @@ pub const App = struct {
                         }
                     },
                     c.SDL_EVENT_KEY_DOWN => {
-                        const move_speed = 10.0;
-                        const zoom_speed = 0.1;
+                        const move_speed = 100.0;
+                        const zoom_speed = 0.03;
                         switch (e.key.key) {
                             c.SDLK_ESCAPE => running = false,
-                            c.SDLK_Q => self.scale -= zoom_speed, // Zoom Out
+                            c.SDLK_Q => self.scale -= zoom_speed,
                             c.SDLK_E => self.scale += zoom_speed,
-                            c.SDLK_W => self.camera_pos[1] -= move_speed, // Camera Up
-                            c.SDLK_S => self.camera_pos[1] += move_speed, // Camera Down
-                            c.SDLK_A => self.camera_pos[0] -= move_speed, // Camera Left
-                            c.SDLK_D => self.camera_pos[0] += move_speed, // Camera Right
+                            c.SDLK_W => self.camera_pos[1] -= move_speed * self.scale,
+                            c.SDLK_S => self.camera_pos[1] += move_speed * self.scale,
+                            c.SDLK_A => self.camera_pos[0] -= move_speed * self.scale,
+                            c.SDLK_D => self.camera_pos[0] += move_speed * self.scale,
                             else => {},
                         }
                     },
@@ -305,16 +342,21 @@ pub const App = struct {
                 }
             }
 
-            // 1. If an SDL event told us the window resized, recreate BEFORE acquiring.
             if (window_resized) {
                 window_resized = false;
                 try self.recreateSwapchain();
             }
 
-            // 2. Wait for the GPU to finish the previous frame using this slot
-            try handleError(c.vkWaitForFences(self.device, 1, &self.in_flight_fences[current_frame], c.VK_TRUE, std.math.maxInt(u64)));
+            try handleError(
+                c.vkWaitForFences(
+                    self.device,
+                    1,
+                    &self.in_flight_fences[current_frame],
+                    c.VK_TRUE,
+                    std.math.maxInt(u64),
+                ),
+            );
 
-            // 3. Acquire the next image from the swapchain
             var image_index: u32 = undefined;
             const acquire_result = c.vkAcquireNextImageKHR(
                 self.device,
@@ -325,7 +367,6 @@ pub const App = struct {
                 &image_index,
             );
 
-            // Handle acquire failures (on failure, the semaphore is left unsignaled, so continue is safe)
             if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
                 try self.recreateSwapchain();
                 continue;
@@ -334,61 +375,15 @@ pub const App = struct {
             }
 
             // Only reset the fence once we know we are definitely submitting work
-            try handleError(c.vkResetFences(self.device, 1, &self.in_flight_fences[current_frame]));
+            try handleError(
+                c.vkResetFences(
+                    self.device,
+                    1,
+                    &self.in_flight_fences[current_frame],
+                ),
+            );
 
-            // Update Memory Mapped Buffers (QuadVertex + Uniform)
-            const nodes = [_]types.Node{
-                .{
-                    .name = "A",
-                    .inps = &[_]types.Pin{
-                        .{
-                            .name = "inp-0",
-                        },
-                        .{
-                            .name = "inp-1",
-                        },
-                    },
-                    .outs = &[_]types.Pin{
-                        .{
-                            .name = "out-0",
-                        },
-                    },
-                    .x = 0,
-                    .y = 0,
-                },
-                .{
-                    .name = "B",
-                    .inps = &[_]types.Pin{
-                        .{
-                            .name = "inp-0",
-                        },
-                    },
-                    .outs = &[_]types.Pin{
-                        .{
-                            .name = "out-0",
-                        },
-                        .{
-                            .name = "out-1",
-                        },
-                    },
-                    .x = 500,
-                    .y = 300,
-                },
-            };
-
-            var vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
-            defer vertices.deinit(self.allocator);
-            for (nodes) |node| {
-                try node.appendVerticesNode(self.allocator, &vertices);
-            }
-            for (nodes) |node| {
-                try node.appendVerticesPins(self.allocator, &vertices);
-            }
-
-            const vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
-            @memcpy(vert_map[0..vertices.items.len], vertices.items);
-
-            // In step 3 (Update Memory Mapped Buffers)
+            // Update uniforms
             const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
             uniform_map[0] = .{
                 .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
@@ -396,9 +391,34 @@ pub const App = struct {
                 .scale = self.scale,
             };
 
+            // Update QuadVertex buffers
+            var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
+            defer quad_vertices.deinit(self.allocator);
+            for (nodes) |node| {
+                try node.appendVerticesNode(self.allocator, &quad_vertices);
+            }
+            for (nodes) |node| {
+                try node.appendVerticesPins(self.allocator, &quad_vertices);
+            }
+
+            const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
+            @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
+
+            var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
+            defer bezier_vertices.deinit(self.allocator);
+
+            for (nodes) |node| {
+                try node.appendVerticesBezier(self.allocator, &bezier_vertices, .{ 1.0, 1.0, 1.0, 1.0 });
+            }
+
+            if (bezier_vertices.items.len > 0) {
+                const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
+            }
+
             // Record Command Buffer
             const cmd = self.command_buffers[current_frame];
-            try handleError(c.vkResetCommandBuffer(cmd, 0)); 
+            try handleError(c.vkResetCommandBuffer(cmd, 0));
 
             const begin_info = c.VkCommandBufferBeginInfo{
                 .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -406,7 +426,7 @@ pub const App = struct {
                 .flags = 0,
                 .pInheritanceInfo = null,
             };
-            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info)); 
+            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info));
 
             const clear_value = c.VkClearValue{ .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } } };
             const render_pass_info = c.VkRenderPassBeginInfo{
@@ -420,21 +440,6 @@ pub const App = struct {
             };
 
             c.vkCmdBeginRenderPass(cmd, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-            c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
-
-            const offsets = [_]c.VkDeviceSize{0};
-            c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-
-            c.vkCmdBindDescriptorSets(
-                cmd,
-                c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self.pipeline_layout,
-                0,
-                1,
-                &self.descriptor_sets[current_frame],
-                0,
-                null,
-            );
 
             const viewport = c.VkViewport{
                 .x = 0.0,
@@ -452,7 +457,49 @@ pub const App = struct {
             };
             c.vkCmdSetScissor(cmd, 0, 1, @ptrCast(&scissor));
 
-            c.vkCmdDraw(cmd, @intCast(vertices.items.len), 1, 0, 0);
+            const offsets = [_]c.VkDeviceSize{0};
+
+            if (bezier_vertices.items.len > 0) {
+                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.bezier_vertex_graphics_pipeline);
+
+                // Bind the Bezier vertex buffer
+                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.bezier_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+
+                // Descriptor sets are already bound from the previous call if the layout is shared,
+                // but re-binding is safer if you have multiple sets.
+                c.vkCmdBindDescriptorSets(
+                    cmd,
+                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &self.descriptor_sets[current_frame],
+                    0,
+                    null,
+                );
+
+                c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
+            }
+
+            if (bezier_vertices.items.len > 0) {
+                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
+
+                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+
+                c.vkCmdBindDescriptorSets(
+                    cmd,
+                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &self.descriptor_sets[current_frame],
+                    0,
+                    null,
+                );
+
+                c.vkCmdDraw(cmd, @intCast(quad_vertices.items.len), 1, 0, 0);
+            }
+
             c.vkCmdEndRenderPass(cmd);
             try handleError(c.vkEndCommandBuffer(cmd)); // Catch error here!
 
@@ -470,10 +517,10 @@ pub const App = struct {
                 .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
             };
 
-            // Catch error here! If this fails, the app will panic immediately instead of generating un-signaled wait errors.
+            // Submit commands
             try handleError(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.in_flight_fences[current_frame]));
 
-            // 6. Present to Screen
+            // Present
             const present_info = c.VkPresentInfoKHR{
                 .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .pNext = null,
@@ -486,16 +533,12 @@ pub const App = struct {
             };
 
             const present_result = c.vkQueuePresentKHR(self.present_queue, &present_info);
-
-            // Check if the swapchain became invalid during presentation
             if (present_result == c.VK_ERROR_OUT_OF_DATE_KHR or present_result == c.VK_SUBOPTIMAL_KHR) {
-                // Flag a resize for the start of the next loop iteration
                 window_resized = true;
             } else if (present_result != c.VK_SUCCESS) {
                 return error.VulkanPresentFailed;
             }
 
-            // 7. Advance Frame
             current_frame = (current_frame + 1) % FRAMES_IN_FLIGHT;
         }
 

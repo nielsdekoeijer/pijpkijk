@@ -2,6 +2,7 @@
 cbuffer ViewUniforms {
     float2 screen_size;
     float2 camera_pos;
+    float scale;
 }
 
 struct FragmentInput {
