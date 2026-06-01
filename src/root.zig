@@ -7,6 +7,7 @@ const types = @import("types.zig");
 
 pub const FRAMES_IN_FLIGHT = 2;
 
+
 pub const App = struct {
     window: *c.struct_SDL_Window,
     instance: c.VkInstance,
@@ -47,8 +48,10 @@ pub const App = struct {
     present_queue: c.VkQueue,
 
     // TEMP
+    nodes: []types.Node,
     camera_pos: [2]f32,
     scale: f32,
+    selected_node: ?usize,
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -237,6 +240,58 @@ pub const App = struct {
 
         self.camera_pos = [_]f32{ -100, -100 };
         self.scale = 1.0;
+
+        self.nodes = try allocator.alloc(types.Node, 3);
+
+        var prng = std.Random.Xoshiro256.init(69);
+        const random = prng.random();
+        self.nodes[0] = types.Node{
+            .color = types.PastelColor.getRandom(random),
+            .name = "RENDERER",
+            .inps = &[_]types.InpPin{
+                .{ .name = "inp-0" }, .{ .name = "inp-1" }, .{ .name = "inp-2" }, .{ .name = "inp-3" }, .{ .name = "inp-4" },
+            },
+            .outs = &[_]types.OutPin{},
+            .x = 600,
+            .y = 300,
+        };
+
+        self.nodes[1] = types.Node{
+            // .color = types.PastelColor.getColorByIndex(1),
+            .color = types.PastelColor.getRandom(random),
+            .name = "POSTPROC",
+            .inps = &[_]types.InpPin{
+                .{ .name = "inp-0" }, .{ .name = "inp-1" }, .{ .name = "inp-2" }, .{ .name = "inp-3" }, .{ .name = "inp-4" },
+            },
+            .outs = &[_]types.OutPin{
+                .{ .name = "out-0", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 0 }} },
+                .{ .name = "out-1", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 1 }} },
+                .{ .name = "out-2", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 2 }} },
+                .{ .name = "out-3", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 2 }} },
+                .{ .name = "out-4", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 4 }} },
+            },
+            .x = 300,
+            .y = -50,
+        };
+
+        self.nodes[2] = types.Node{
+            // .color = types.PastelColor.getColorByIndex(2),
+            .color = types.PastelColor.getRandom(random),
+            .name = "MIXER",
+            .inps = &.{},
+            .outs = &[_]types.OutPin{
+                .{ .name = "out-0", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 0 }} },
+                .{ .name = "out-1", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 1 }} },
+                .{ .name = "out-2", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 2 }} },
+                .{ .name = "out-3", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 2 }} },
+                .{ .name = "out-4", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 4 }} },
+            },
+            .x = 50,
+            .y = 100,
+        };
+
+        self.selected_node = null;
+
         return self;
     }
 
@@ -252,39 +307,6 @@ pub const App = struct {
         var e: c.SDL_Event = undefined;
 
         // 1. Initialize Node B with 5 input pins
-        var nodeB = types.Node{
-            .name = "B",
-            .inps = &[_]types.InpPin{
-                .{ .name = "in-0" }, .{ .name = "in-1" }, .{ .name = "in-2" }, .{ .name = "in-3" }, .{ .name = "in-4" },
-            },
-            .outs = &[_]types.OutPin{},
-            .x = 600,
-            .y = 300,
-        };
-
-        // 2. Define the cross-connections (A -> B)
-        const conn0 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 0 }};
-        const conn1 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 1 }};
-        const conn2 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 2 }};
-        const conn3 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 3 }};
-        const conn4 = [_]types.Connection{.{ .node = &nodeB, .inp_index = 4 }};
-
-        // 3. Initialize Node A with 5 output pins pointing to B
-        const nodeA = types.Node{
-            .name = "A",
-            .inps = &.{},
-            .outs = &[_]types.OutPin{
-                .{ .name = "out-0", .connections = &conn0 },
-                .{ .name = "out-1", .connections = &conn1 },
-                .{ .name = "out-2", .connections = &conn2 },
-                .{ .name = "out-3", .connections = &conn3 },
-                .{ .name = "out-4", .connections = &conn4 },
-            },
-            .x = 50,
-            .y = 100,
-        };
-
-        const nodes = [_]types.Node{ nodeA, nodeB };
 
         // Handle events
         while (running) {
@@ -302,26 +324,51 @@ pub const App = struct {
 
                         std.log.debug("Mouse button down (World): ({d}, {d})", .{ world_x, world_y });
 
+                        var i = self.nodes.len;
+                        while (i > 0) {
+                            i -= 1;
+                            if (self.nodes[i].contains(world_x, world_y)) {
+                                self.selected_node = i;
+                                break;
+                            }
+                        }
+
                         key_down_x = e.button.x;
                         key_down_y = e.button.y;
                     },
                     c.SDL_EVENT_MOUSE_BUTTON_UP => {
-                        std.log.debug("Mouse button lift: ({}, {})", .{
-                            self.camera_pos[0] + e.button.x,
-                            self.camera_pos[1] + e.button.y,
-                        });
+                        const world_x = (e.button.x / self.scale) + self.camera_pos[0];
+                        const world_y = (e.button.y / self.scale) + self.camera_pos[1];
+
+                        std.log.debug("Mouse button lift (World): ({d}, {d})", .{ world_x, world_y });
+
+                        self.selected_node = null;
                         key_down_x = null;
                         key_down_y = null;
                     },
                     c.SDL_EVENT_MOUSE_MOTION => {
                         if (key_down_x) |x| {
-                            self.camera_pos[0] -= e.button.x - x;
-                            key_down_x = e.button.x;
+                            const dx = e.motion.x - x;
+                            const world_dx = dx / self.scale;
+
+                            if (self.selected_node) |node_index| {
+                                self.nodes[node_index].x += world_dx;
+                            } else {
+                                self.camera_pos[0] -= world_dx;
+                            }
+                            key_down_x = e.motion.x;
                         }
 
                         if (key_down_y) |y| {
-                            self.camera_pos[1] -= e.button.y - y;
-                            key_down_y = e.button.y;
+                            const dy = e.motion.y - y;
+                            const world_dy = dy / self.scale;
+
+                            if (self.selected_node) |node_index| {
+                                self.nodes[node_index].y += world_dy;
+                            } else {
+                                self.camera_pos[1] -= world_dy;
+                            }
+                            key_down_y = e.motion.y;
                         }
                     },
                     c.SDL_EVENT_KEY_DOWN => {
@@ -394,10 +441,10 @@ pub const App = struct {
             // Update QuadVertex buffers
             var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
             defer quad_vertices.deinit(self.allocator);
-            for (nodes) |node| {
+            for (self.nodes) |node| {
                 try node.appendVerticesNode(self.allocator, &quad_vertices);
             }
-            for (nodes) |node| {
+            for (self.nodes) |node| {
                 try node.appendVerticesPins(self.allocator, &quad_vertices);
             }
 
@@ -407,8 +454,8 @@ pub const App = struct {
             var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
             defer bezier_vertices.deinit(self.allocator);
 
-            for (nodes) |node| {
-                try node.appendVerticesBezier(self.allocator, &bezier_vertices, .{ 1.0, 1.0, 1.0, 1.0 });
+            for (self.nodes) |node| {
+                try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
             }
 
             if (bezier_vertices.items.len > 0) {
@@ -457,35 +504,10 @@ pub const App = struct {
             };
             c.vkCmdSetScissor(cmd, 0, 1, @ptrCast(&scissor));
 
-            const offsets = [_]c.VkDeviceSize{0};
-
-            if (bezier_vertices.items.len > 0) {
-                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.bezier_vertex_graphics_pipeline);
-
-                // Bind the Bezier vertex buffer
-                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.bezier_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-
-                // Descriptor sets are already bound from the previous call if the layout is shared,
-                // but re-binding is safer if you have multiple sets.
-                c.vkCmdBindDescriptorSets(
-                    cmd,
-                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &self.descriptor_sets[current_frame],
-                    0,
-                    null,
-                );
-
-                c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
-            }
-
-            if (bezier_vertices.items.len > 0) {
+            if (quad_vertices.items.len > 0) {
+                const offsets = [_]c.VkDeviceSize{0};
                 c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
-
                 c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-
                 c.vkCmdBindDescriptorSets(
                     cmd,
                     c.VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -500,10 +522,27 @@ pub const App = struct {
                 c.vkCmdDraw(cmd, @intCast(quad_vertices.items.len), 1, 0, 0);
             }
 
-            c.vkCmdEndRenderPass(cmd);
-            try handleError(c.vkEndCommandBuffer(cmd)); // Catch error here!
+            if (bezier_vertices.items.len > 0) {
+                const offsets = [_]c.VkDeviceSize{0};
+                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.bezier_vertex_graphics_pipeline);
+                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.bezier_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                c.vkCmdBindDescriptorSets(
+                    cmd,
+                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &self.descriptor_sets[current_frame],
+                    0,
+                    null,
+                );
 
-            // 5. Submit to Graphics Queue (Added explicit @ptrCasts to guarantee C-compatibility)
+                c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
+            }
+
+            c.vkCmdEndRenderPass(cmd);
+            try handleError(c.vkEndCommandBuffer(cmd));
+
             const wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
             const submit_info = c.VkSubmitInfo{
                 .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -617,5 +656,6 @@ pub const App = struct {
         defer util.deinitVkFences(self.allocator, self.device, self.in_flight_fences);
         defer util.deinitVkDescriptorPool(self.device, self.descriptor_pool);
         defer util.deinitVkDescriptorSets(self.allocator, self.descriptor_sets);
+        defer self.allocator.free(self.nodes);
     }
 };

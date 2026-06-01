@@ -1,6 +1,62 @@
 const std = @import("std");
 const c = @import("c.zig").c;
 
+pub const PastelColor = enum(u8) {
+    SoftRed,
+    DustyRose,
+    Peach,
+    Cream,
+    Mint,
+    Sage,
+    SkyBlue,
+    Periwinkle,
+    Lavender,
+    Plum,
+    WarmGray,
+    Sand,
+    Gold,
+    Aqua,
+    Lilac,
+    Blush,
+
+    pub const palette = [_][4]f32{
+        .{ 0.95, 0.60, 0.60, 1.0 }, // SoftRed
+        .{ 0.90, 0.65, 0.75, 1.0 }, // DustyRose
+        .{ 0.98, 0.75, 0.60, 1.0 }, // Peach
+        .{ 0.95, 0.90, 0.75, 1.0 }, // Cream
+        .{ 0.65, 0.85, 0.75, 1.0 }, // Mint
+        .{ 0.70, 0.80, 0.70, 1.0 }, // Sage
+        .{ 0.65, 0.80, 0.90, 1.0 }, // SkyBlue
+        .{ 0.75, 0.75, 0.90, 1.0 }, // Periwinkle
+        .{ 0.80, 0.70, 0.90, 1.0 }, // Lavender
+        .{ 0.85, 0.65, 0.80, 1.0 }, // Plum
+        .{ 0.75, 0.75, 0.75, 1.0 }, // WarmGray
+        .{ 0.85, 0.80, 0.70, 1.0 }, // Sand
+        .{ 0.90, 0.85, 0.60, 1.0 }, // Gold
+        .{ 0.60, 0.85, 0.85, 1.0 }, // Aqua
+        .{ 0.85, 0.75, 0.95, 1.0 }, // Lilac
+        .{ 0.95, 0.75, 0.80, 1.0 }, // Blush
+    };
+
+    pub fn get(self: PastelColor) [4]f32 {
+        return palette[@intFromEnum(self)];
+    }
+
+    pub fn getRandom(random: std.Random) [4]f32 {
+        const index = @as(u8, @intCast(std.Random.uintLessThan(random, u8, 16)));
+        return @as(PastelColor, @enumFromInt(index)).get();
+    }
+
+    fn fromIndex(index: usize) PastelColor {
+        const variant_count = @typeInfo(PastelColor).@"enum".fields.len;
+        return @enumFromInt(index % variant_count);
+    }
+
+    pub fn getColorByIndex(index: usize) [4]f32 {
+        return fromIndex(index).get();
+    }
+};
+
 /// Helper type representing a 4x4 matrix
 pub const Mat4 = extern struct {
     data: [16]f32,
@@ -96,8 +152,8 @@ pub const BezierVertex = extern struct {
     p1: [2]f32,
     p2: [2]f32,
     p3: [2]f32,
-    thickness: f32,
     color: [4]f32,
+    thickness: f32,
 
     pub fn getVkBindingDiscription() [1]c.VkVertexInputBindingDescription {
         return [_]c.VkVertexInputBindingDescription{.{
@@ -107,7 +163,7 @@ pub const BezierVertex = extern struct {
         }};
     }
 
-    pub fn getVkAttributeDiscription() [6]c.VkVertexInputAttributeDescription {
+    pub fn getVkAttributeDiscription() [7]c.VkVertexInputAttributeDescription {
         return [_]c.VkVertexInputAttributeDescription{
             .{
                 .location = 0,
@@ -145,6 +201,12 @@ pub const BezierVertex = extern struct {
                 .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
                 .offset = @offsetOf(BezierVertex, "color"),
             },
+            .{
+                .location = 6,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
+                .offset = @offsetOf(BezierVertex, "thickness"),
+            },
         };
     }
 };
@@ -162,7 +224,7 @@ pub const OutPin = struct {
 
 /// Representation of a connection bewteen an output pin and an input pin
 pub const Connection = struct {
-    node: *Node,
+    node_index: usize,
     inp_index: usize,
 };
 
@@ -176,6 +238,9 @@ pub const Node = struct {
 
     /// Ordered list of outputs
     outs: []const OutPin,
+
+    /// Color used for pins and connections
+    color: [4]f32 = .{ 1.0, 0.5, 0.0, 1.0 },
 
     /// X-coordinate of the upper-left corner of the node
     x: f32,
@@ -277,16 +342,11 @@ pub const Node = struct {
     }
 
     pub fn appendVerticesPins(self: Node, allocator: std.mem.Allocator, list: *std.ArrayList(QuadVertex)) !void {
-        const color: [4]f32 = .{ 1.0, 0.5, 0.0, 1.0 };
-
         {
             const H_BEG: f32 = H_OFFSET_TITLE;
             const W_BEG: f32 = 0;
             for (self.inps, 0..self.inps.len) |pin, i| {
                 _ = pin;
-                // const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
-                const burn = 1.0;
-
                 const px = W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
                 const py = H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
                 try appendQuad(
@@ -296,7 +356,7 @@ pub const Node = struct {
                     self.y + py,
                     W_PIN,
                     H_PIN,
-                    .{ burn * color[0], burn * color[1], burn * color[2], color[3] },
+                    self.getInpPinColor(i),
                     .{ 2.5, 2.5, 0.0, 0.0 },
                 );
             }
@@ -307,9 +367,6 @@ pub const Node = struct {
             const W_BEG: f32 = W_NODE - W_OFFSET_INNER_PIN * 2 - W_PIN;
             for (self.outs, 0..self.outs.len) |pin, i| {
                 _ = pin;
-                // const burn = 1.0 - 0.3 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(self.computeMemberCount() - 1));
-                const burn = 1.0;
-
                 const px = W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
                 const py = H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
                 try appendQuad(
@@ -319,26 +376,38 @@ pub const Node = struct {
                     self.y + py,
                     W_PIN,
                     H_PIN,
-                    .{ burn * color[0], burn * color[1], burn * color[2], color[3] },
+                    self.getOutPinColor(i),
                     .{ 0.0, 0.0, 2.5, 2.5 },
                 );
             }
         }
     }
 
-    fn getInpPinX(self: *const Node, _: usize) f32 {
+    fn getInpPinColor(self: Node, index: usize) [4]f32 {
+        const base = self.color;
+        const burn = 1.0 - 0.9 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computeMemberCount()));
+        return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
+    }
+
+    fn getOutPinColor(self: Node, index: usize) [4]f32 {
+        const base = self.color;
+        const burn = 1.0 - 0.75 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computeMemberCount()));
+        return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
+    }
+
+    fn getInpPinX(self: Node, _: usize) f32 {
         return self.x;
     }
 
-    fn getOutPinX(self: *const Node, _: usize) f32 {
+    fn getOutPinX(self: Node, _: usize) f32 {
         return self.x + W_NODE;
     }
 
-    fn getInpPinY(self: *const Node, index: usize) f32 {
+    fn getInpPinY(self: Node, index: usize) f32 {
         return self.y + H_OFFSET_TITLE + (@as(f32, @floatFromInt(index)) * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
     }
 
-    fn getOutPinY(self: *const Node, index: usize) f32 {
+    fn getOutPinY(self: Node, index: usize) f32 {
         return self.y + H_OFFSET_TITLE + (@as(f32, @floatFromInt(index)) * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
     }
 
@@ -346,13 +415,16 @@ pub const Node = struct {
     pub fn appendVerticesBezier(
         self: Node,
         allocator: std.mem.Allocator,
+        nodes: []Node,
         list: *std.ArrayList(BezierVertex),
-        color: [4]f32,
     ) !void {
         for (self.outs, 0..) |out, i| {
             for (out.connections) |connection| {
                 const p0 = [2]f32{ self.getOutPinX(i), self.getOutPinY(i) };
-                const p3 = [2]f32{ connection.node.getInpPinX(connection.inp_index), connection.node.getInpPinY(connection.inp_index) };
+                const p3 = [2]f32{
+                    nodes[connection.node_index].getInpPinX(connection.inp_index),
+                    nodes[connection.node_index].getInpPinY(connection.inp_index),
+                };
 
                 const mid_x = (p0[0] + p3[0]) / 2.0;
 
@@ -373,17 +445,28 @@ pub const Node = struct {
                 const h = (max_y - min_y) + (padding * 2);
 
                 const quad = [_]BezierVertex{
-                    .{ .pos = .{ x, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
-                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
-                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
+                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
+                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
 
-                    .{ .pos = .{ x + w, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
-                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
-                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = color },
+                    .{ .pos = .{ x + w, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
+                    .{ .pos = .{ x, y + h }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
+                    .{ .pos = .{ x + w, y }, .p0 = p0, .p1 = p1, .p2 = p2, .p3 = p3, .thickness = thickness, .color = self.getOutPinColor(i) },
                 };
 
                 try list.appendSlice(allocator, &quad);
             }
         }
+    }
+
+    pub fn contains(self: Node, x: f32, y: f32) bool {
+        if (x >= self.x and x <= self.x + W_NODE) {
+            const H_NODE = self.computeNodeHeight();
+            if (y >= self.y and y <= self.y + H_NODE) {
+                return true;
+            }
+        }
+
+        return false;
     }
 };

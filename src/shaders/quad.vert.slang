@@ -27,7 +27,6 @@ struct VertexOutput {
 VertexOutput main(VertexInput input) {
     VertexOutput output;
 
-    // Fixed zoom math
     float2 transformed_pos = (input.position - camera_pos) * scale;
     float2 ndc = (transformed_pos / screen_size) * 2.0 - 1.0;
     output.position = float4(ndc.x, ndc.y, 0.0, 1.0);
@@ -36,8 +35,6 @@ VertexOutput main(VertexInput input) {
     output.half_size = input.half_size * scale;
     output.radii = input.radii * scale;
     output.color = input.color;
-
-    
 
     return output;
 }

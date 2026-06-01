@@ -254,16 +254,15 @@ pub fn initVkInstance(
     // create our list of requested instance layers, which can provide us debug information
     var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
-    try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-    try checkRequestedVkInstanceLayersSupported(allocator, layers.items);
+    if (@import("builtin").mode == .Debug) {
+        try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
+        try checkRequestedVkInstanceLayersSupported(allocator, layers.items);
+    }
 
-    // create the instance
-    try handleError(
-        c.vkCreateInstance(&c.VkInstanceCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-
-            // I create the logger for vulkan here
-            .pNext = &c.VkDebugUtilsMessengerCreateInfoEXT{
+    // handler
+    const debug_messenger = blk: {
+        if (@import("builtin").mode == .Debug) {
+            break :blk &c.VkDebugUtilsMessengerCreateInfoEXT{
                 .sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
                 .pNext = null,
                 .flags = 0,
@@ -281,7 +280,19 @@ pub fn initVkInstance(
 
                 // context for logging
                 .pUserData = null,
-            },
+            };
+        } else {
+            break :blk null;
+        }
+    };
+
+    // create the instance
+    try handleError(
+        c.vkCreateInstance(&c.VkInstanceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+
+            // I create the logger for vulkan here
+            .pNext = debug_messenger,
 
             // apparently this helps for portability, metalVK on macos etc.
             .flags = c.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
@@ -980,8 +991,10 @@ pub fn initVkDevice(
     // create our list of requested instance layers
     var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer layers.deinit(allocator);
-    try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-    try checkRequestedVkDeviceLayersSupported(allocator, physical_device, layers.items);
+    if (@import("builtin").mode == .Debug) {
+        try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
+        try checkRequestedVkDeviceLayersSupported(allocator, physical_device, layers.items);
+    }
 
     // populate queue families
     const queuePriorities: f32 = 1.0;
@@ -1996,7 +2009,7 @@ pub const VertexBufferSet = struct {
 };
 
 pub fn initVertexBufferSet(
-    T: type, 
+    T: type,
     allocator: std.mem.Allocator,
     device: c.VkDevice,
     physical_device: c.VkPhysicalDevice,

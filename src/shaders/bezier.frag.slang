@@ -5,6 +5,7 @@ struct FragmentInput {
     [[vk::location(2)]] float2 p2;
     [[vk::location(3)]] float2 p3;
     [[vk::location(4)]] float4 color;
+    [[vk::location(5)]] float thickness;
 };
 
 // Evaluate Cubic Bezier at t
@@ -47,9 +48,8 @@ float4 main(FragmentInput input) : SV_Target {
     float dist = length(pixel_pos - closest);
     
     // 4. Anti-aliasing
-    float thickness = 4.0; // Hardcoded, but you can pass this in via VertexOutput
     float aa_width = 1.5;
-    float alpha = 1.0 - smoothstep(thickness - aa_width, thickness, dist);
+    float alpha = 1.0 - smoothstep(input.thickness - aa_width, input.thickness, dist);
     
     if (alpha <= 0.0) discard;
     
