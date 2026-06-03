@@ -7,14 +7,17 @@ pkgs.mkShell rec {
     pkgs.zig
     pkgs.zls
     pkgs.bash
-    pkgs.pkg-config
     pkgs.file
+    pkgs.sdl3-image.dev
     pkgs.sdl3.dev
     pkgs.sdl3.lib
     pkgs.shader-slang
     pkgs.vulkan-headers
     pkgs.vulkan-loader
     pkgs.vulkan-validation-layers
+    pkgs.msdf-atlas-gen
+    pkgs.pipewire.dev
+    pkgs.pkg-config
   ];
 
   shellHook = ''

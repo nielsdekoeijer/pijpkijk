@@ -4,8 +4,9 @@ struct FragmentInput {
     [[vk::location(1)]] float2 p1;
     [[vk::location(2)]] float2 p2;
     [[vk::location(3)]] float2 p3;
-    [[vk::location(4)]] float4 color;
-    [[vk::location(5)]] float thickness;
+    [[vk::location(4)]] float4 color_beg;
+    [[vk::location(5)]] float4 color_end;
+    [[vk::location(6)]] float thickness;
 };
 
 // Evaluate Cubic Bezier at t
@@ -52,6 +53,7 @@ float4 main(FragmentInput input) : SV_Target {
     float alpha = 1.0 - smoothstep(input.thickness - aa_width, input.thickness, dist);
     
     if (alpha <= 0.0) discard;
-    
-    return float4(input.color.rgb, input.color.a * alpha);
+
+    float4 base_color = lerp(input.color_beg, input.color_end, t);
+    return float4(base_color.rgb, base_color.a * alpha);
 }

@@ -11,8 +11,9 @@ struct VertexInput {
     [[vk::location(2)]] float2 p1 : P1;
     [[vk::location(3)]] float2 p2 : P2;
     [[vk::location(4)]] float2 p3 : P3;
-    [[vk::location(5)]] float4 color : COLOR;
-    [[vk::location(6)]] float thickness: THICKNESS;
+    [[vk::location(5)]] float4 color_beg : COLOR;
+    [[vk::location(6)]] float4 color_end : COLOR;
+    [[vk::location(7)]] float thickness: THICKNESS;
 };
 
 struct VertexOutput {
@@ -21,8 +22,9 @@ struct VertexOutput {
     [[vk::location(1)]] float2 p1 : P1;
     [[vk::location(2)]] float2 p2 : P2;
     [[vk::location(3)]] float2 p3 : P3;
-    [[vk::location(4)]] float4 color : COLOR;
-    [[vk::location(5)]] float thickness: THICKNESS;
+    [[vk::location(4)]] float4 color_beg : COLOR;
+    [[vk::location(5)]] float4 color_end : COLOR;
+    [[vk::location(6)]] float thickness: THICKNESS;
 };
 
 [shader("vertex")]
@@ -41,6 +43,7 @@ VertexOutput main(VertexInput input) {
     output.p3 = (input.p3 - camera_pos) * scale;
     output.thickness = input.thickness * scale;
     
-    output.color = input.color;
+    output.color_beg = input.color_beg;
+    output.color_end = input.color_end;
     return output;
 }

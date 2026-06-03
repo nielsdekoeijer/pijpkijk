@@ -4,9 +4,9 @@ const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
 const util = @import("util.zig");
 const types = @import("types.zig");
+const graph = @import("graph.zig");
 
-pub const FRAMES_IN_FLIGHT = 2;
-
+pub const FRAMES_IN_FLIGHT = 3;
 
 pub const App = struct {
     window: *c.struct_SDL_Window,
@@ -28,17 +28,21 @@ pub const App = struct {
     quad_frag_shader: c.VkShaderModule,
     bezier_vert_shader: c.VkShaderModule,
     bezier_frag_shader: c.VkShaderModule,
+    text_vert_shader: c.VkShaderModule,
+    text_frag_shader: c.VkShaderModule,
     render_pass: c.VkRenderPass,
     descriptor_set_layout: c.VkDescriptorSetLayout,
     pipeline_layout: c.VkPipelineLayout,
     quad_vertex_graphics_pipeline: c.VkPipeline,
     bezier_vertex_graphics_pipeline: c.VkPipeline,
+    text_vertex_graphics_pipeline: c.VkPipeline,
     framebuffers: []c.VkFramebuffer,
     command_pool: c.VkCommandPool,
     command_buffers: []c.VkCommandBuffer,
     uniform_buffer_set: util.UniformBufferSet,
     quad_vertex_buffer_set: util.VertexBufferSet,
     bezier_vertex_buffer_set: util.VertexBufferSet,
+    text_vertex_buffer_set: util.VertexBufferSet,
     image_availible_semaphore: []c.VkSemaphore,
     render_finished_semaphore: []c.VkSemaphore,
     in_flight_fences: []c.VkFence,
@@ -46,6 +50,14 @@ pub const App = struct {
     descriptor_sets: []c.VkDescriptorSet,
     graphics_queue: c.VkQueue,
     present_queue: c.VkQueue,
+    font_atlas: types.FontAtlas,
+    font_texture_image: util.Image,
+    font_texture_view: []c.VkImageView,
+    font_sampler: c.VkSampler,
+
+    // TEMP
+    pw_manager: *graph.PwGraph,
+    frame_arena: std.heap.ArenaAllocator,
 
     // TEMP
     nodes: []types.Node,
@@ -59,9 +71,12 @@ pub const App = struct {
     const default_width = 800;
     const default_height = 600;
 
-    pub fn init(allocator: std.mem.Allocator) !App {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) !App {
         var self: @This() = undefined;
         self.allocator = allocator;
+
+        self.pw_manager = try graph.PwGraph.init(allocator, io);
+        self.frame_arena = std.heap.ArenaAllocator.init(allocator);
 
         // =InitializeSDL3=============================================================================================
         try util.sdlInit(.{});
@@ -110,6 +125,7 @@ pub const App = struct {
             self.present_mode,
             self.graphics_queue_index,
             self.present_queue_index,
+            null,
         );
         errdefer util.deinitVkSwapchain(self.device, self.swapchain);
 
@@ -133,18 +149,23 @@ pub const App = struct {
         self.bezier_frag_shader = try util.initVkShaderModule("./shaders/bezier.frag.spirv", self.device);
         errdefer util.deinitVkShaderModule(self.device, self.bezier_frag_shader);
 
+        self.text_vert_shader = try util.initVkShaderModule("./shaders/text.vert.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.text_vert_shader);
+
+        self.text_frag_shader = try util.initVkShaderModule("./shaders/text.frag.spirv", self.device);
+        errdefer util.deinitVkShaderModule(self.device, self.text_frag_shader);
+
         // =RenderPass=================================================================================================
         self.render_pass = try util.initVkRenderPass(self.device, self.surface_format);
         errdefer util.deinitVkRenderPass(self.device, self.render_pass);
 
-        // =PipelineLayout=============================================================================================
+        // =Pipeline===================================================================================================
         self.descriptor_set_layout = try util.initVkDescriptorSetLayout(self.device);
         errdefer util.deinitVkDescriptorSetLayout(self.device, self.descriptor_set_layout);
 
         self.pipeline_layout = try util.initVkPipelineLayout(self.device, self.descriptor_set_layout);
         errdefer util.deinitVkPipelineLayout(self.device, self.pipeline_layout);
 
-        // =GraphicsPipeline===========================================================================================
         self.quad_vertex_graphics_pipeline = try util.initQuadVertexVkGraphicsPipeline(
             self.device,
             self.render_pass,
@@ -162,6 +183,15 @@ pub const App = struct {
             self.bezier_frag_shader,
         );
         errdefer util.deinitVkPipeline(self.device, self.bezier_vertex_graphics_pipeline);
+
+        self.text_vertex_graphics_pipeline = try util.initTextVertexVkGraphicsPipeline(
+            self.device,
+            self.render_pass,
+            self.pipeline_layout,
+            self.text_vert_shader,
+            self.text_frag_shader,
+        );
+        errdefer util.deinitVkPipeline(self.device, self.text_vertex_graphics_pipeline);
 
         // =FrameBuffers===============================================================================================
         self.framebuffers = try util.initFramebuffers(
@@ -185,7 +215,9 @@ pub const App = struct {
         );
         errdefer util.deinitCommandBuffers(allocator, self.command_buffers);
 
-        // =UniformBuffers=============================================================================================
+        // =Buffers====================================================================================================
+        // To enable mutli-buffering, we create SETS of the objects we need, parameterized by FRAMES_IN_FLIGHT
+
         self.uniform_buffer_set = try util.initUniformBufferSet(
             allocator,
             self.device,
@@ -194,13 +226,12 @@ pub const App = struct {
         );
         errdefer util.deinitUniformBufferSet(allocator, self.device, self.uniform_buffer_set);
 
-        // =VertexBuffers==================================================================================================
         self.quad_vertex_buffer_set = try util.initVertexBufferSet(
             types.QuadVertex,
             allocator,
             self.device,
             self.physical_device,
-            1000,
+            100000,
             FRAMES_IN_FLIGHT,
         );
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
@@ -210,7 +241,17 @@ pub const App = struct {
             allocator,
             self.device,
             self.physical_device,
-            1000,
+            100000,
+            FRAMES_IN_FLIGHT,
+        );
+        errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
+
+        self.text_vertex_buffer_set = try util.initVertexBufferSet(
+            types.TextVertex,
+            allocator,
+            self.device,
+            self.physical_device,
+            100000,
             FRAMES_IN_FLIGHT,
         );
         errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
@@ -225,6 +266,32 @@ pub const App = struct {
         self.in_flight_fences = try util.initVkFences(allocator, self.device, FRAMES_IN_FLIGHT);
         errdefer util.deinitVkFences(allocator, self.device, self.in_flight_fences);
 
+        // =Fonts======================================================================================================
+        self.font_atlas = try types.FontAtlas.init(allocator, @embedFile("fonts/RobotoMono-Regular.json"));
+
+        self.font_texture_image = try util.initTextureImage(
+            self.device,
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            @embedFile("fonts/RobotoMono-Regular.png"),
+        );
+        errdefer util.deinitTextureImage(self.device, self.font_texture_image.image, self.font_texture_image.image_memory);
+
+        self.font_texture_view = try util.initVkImageViews(
+            self.allocator,
+            self.device,
+            @constCast(&[_]c.VkImage{self.font_texture_image.image}),
+            c.VkSurfaceFormatKHR{
+                .format = c.VK_FORMAT_R8G8B8A8_UNORM,
+                .colorSpace = c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            },
+        );
+        errdefer util.deinitVkImageViews(allocator, self.device, self.font_texture_view);
+
+        self.font_sampler = try util.initTextureSampler(self.device, self.physical_device);
+        errdefer util.deinitTextureSampler(self.device, self.font_sampler);
+
         // =Descriptors================================================================================================
         self.descriptor_pool = try util.initVkDescriptorPool(self.device, self.uniform_buffer_set.vkUniformBuffers);
         errdefer util.deinitVkDescriptorPool(self.device, self.descriptor_pool);
@@ -235,60 +302,16 @@ pub const App = struct {
             self.descriptor_set_layout,
             self.descriptor_pool,
             self.uniform_buffer_set.vkUniformBuffers,
+            self.font_texture_view[0],
+            self.font_sampler,
         );
         errdefer util.deinitVkDescriptorSets(allocator, self.descriptor_sets);
 
         self.camera_pos = [_]f32{ -100, -100 };
         self.scale = 1.0;
 
-        self.nodes = try allocator.alloc(types.Node, 3);
-
-        var prng = std.Random.Xoshiro256.init(69);
-        const random = prng.random();
-        self.nodes[0] = types.Node{
-            .color = types.PastelColor.getRandom(random),
-            .name = "RENDERER",
-            .inps = &[_]types.InpPin{
-                .{ .name = "inp-0" }, .{ .name = "inp-1" }, .{ .name = "inp-2" }, .{ .name = "inp-3" }, .{ .name = "inp-4" },
-            },
-            .outs = &[_]types.OutPin{},
-            .x = 600,
-            .y = 300,
-        };
-
-        self.nodes[1] = types.Node{
-            // .color = types.PastelColor.getColorByIndex(1),
-            .color = types.PastelColor.getRandom(random),
-            .name = "POSTPROC",
-            .inps = &[_]types.InpPin{
-                .{ .name = "inp-0" }, .{ .name = "inp-1" }, .{ .name = "inp-2" }, .{ .name = "inp-3" }, .{ .name = "inp-4" },
-            },
-            .outs = &[_]types.OutPin{
-                .{ .name = "out-0", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 0 }} },
-                .{ .name = "out-1", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 1 }} },
-                .{ .name = "out-2", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 2 }} },
-                .{ .name = "out-3", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 2 }} },
-                .{ .name = "out-4", .connections = &[_]types.Connection{.{ .node_index = 0, .inp_index = 4 }} },
-            },
-            .x = 300,
-            .y = -50,
-        };
-
-        self.nodes[2] = types.Node{
-            // .color = types.PastelColor.getColorByIndex(2),
-            .color = types.PastelColor.getRandom(random),
-            .name = "MIXER",
-            .inps = &.{},
-            .outs = &[_]types.OutPin{
-                .{ .name = "out-0", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 0 }} },
-                .{ .name = "out-1", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 1 }} },
-                .{ .name = "out-2", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 2 }} },
-                .{ .name = "out-3", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 2 }} },
-                .{ .name = "out-4", .connections = &[_]types.Connection{.{ .node_index = 1, .inp_index = 4 }} },
-            },
-            .x = 50,
-            .y = 100,
-        };
+        _ = self.frame_arena.reset(.retain_capacity);
+        self.nodes = try self.pw_manager.buildRenderNodes(self.frame_arena.allocator());
 
         self.selected_node = null;
 
@@ -299,6 +322,7 @@ pub const App = struct {
         std.log.info("Running loop...", .{});
         errdefer std.log.info("Running loop exited with failure", .{});
 
+        // State
         var key_down_x: ?f32 = null;
         var key_down_y: ?f32 = null;
         var running = true;
@@ -306,10 +330,9 @@ pub const App = struct {
         var window_resized = false;
         var e: c.SDL_Event = undefined;
 
-        // 1. Initialize Node B with 5 input pins
-
-        // Handle events
+        // Our main loop of the program
         while (running) {
+            // Handle events
             while (c.SDL_PollEvent(&e) != false) {
                 switch (e.type) {
                     c.SDL_EVENT_QUIT, c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => {
@@ -389,11 +412,14 @@ pub const App = struct {
                 }
             }
 
+            // If window resized, we must recreate the swapchain
             if (window_resized) {
                 window_resized = false;
                 try self.recreateSwapchain();
             }
 
+            // Stops CPU from overwriting buffers currently in flight, this garuntee that the GPU has finished working
+            // on `current_frame` before we start overwriting stuff.
             try handleError(
                 c.vkWaitForFences(
                     self.device,
@@ -404,21 +430,27 @@ pub const App = struct {
                 ),
             );
 
+            // Retrieve the image of the next swapchain image
             var image_index: u32 = undefined;
-            const acquire_result = c.vkAcquireNextImageKHR(
-                self.device,
-                self.swapchain,
-                std.math.maxInt(u64),
-                self.image_availible_semaphore[current_frame],
-                null,
-                &image_index,
-            );
+            {
+                const acquire_result = c.vkAcquireNextImageKHR(
+                    self.device,
+                    self.swapchain,
+                    std.math.maxInt(u64),
+                    // Is when the image is safe to draw to, can be either a semaphore or a fence. Note we return
+                    // BEFORE the semaphore is signaled! So it must be checked.
+                    self.image_availible_semaphore[current_frame],
+                    // This would be the fence, but we are using a semaphore
+                    null,
+                    &image_index,
+                );
 
-            if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
-                try self.recreateSwapchain();
-                continue;
-            } else if (acquire_result != c.VK_SUCCESS and acquire_result != c.VK_SUBOPTIMAL_KHR) {
-                return error.VulkanAcquireFailed;
+                if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
+                    try self.recreateSwapchain();
+                    continue;
+                } else if (acquire_result != c.VK_SUCCESS and acquire_result != c.VK_SUBOPTIMAL_KHR) {
+                    return error.VulkanAcquireFailed;
+                }
             }
 
             // Only reset the fence once we know we are definitely submitting work
@@ -430,79 +462,92 @@ pub const App = struct {
                 ),
             );
 
-            // Update uniforms
-            const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
-            uniform_map[0] = .{
-                .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
-                .camera_pos = self.camera_pos,
-                .scale = self.scale,
-            };
+            // Update uniforms buffers
+            {
+                // TODO: this is ugly as sin, and its because our use of anyopque
+                const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
+                uniform_map[0] = .{
+                    .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
+                    .camera_pos = self.camera_pos,
+                    .scale = self.scale,
+                };
+            }
 
-            // Update QuadVertex buffers
+            // Update QuadVertex buffers for our nodes
             var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
             defer quad_vertices.deinit(self.allocator);
-            for (self.nodes) |node| {
-                try node.appendVerticesNode(self.allocator, &quad_vertices);
-            }
-            for (self.nodes) |node| {
-                try node.appendVerticesPins(self.allocator, &quad_vertices);
+            {
+                for (self.nodes) |node| {
+                    try node.appendVerticesNode(self.allocator, &quad_vertices);
+                }
+                for (self.nodes) |node| {
+                    try node.appendVerticesPins(self.allocator, &quad_vertices);
+                }
+
+                // TODO: this is ugly as sin, and its because our use of anyopque
+                if (quad_vertices.items.len > 0) {
+                    const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                    @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
+                }
             }
 
-            const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
-            @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
-
+            // Update BexierVertex buffers for our connections
             var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
             defer bezier_vertices.deinit(self.allocator);
+            {
+                for (self.nodes) |node| {
+                    try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
+                }
 
-            for (self.nodes) |node| {
-                try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
+                if (bezier_vertices.items.len > 0) {
+                    // TODO: this is ugly as sin, and its because our use of anyopque
+                    const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                    @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
+                }
             }
 
-            if (bezier_vertices.items.len > 0) {
-                const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
-                @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
+            // Update TextVertex buffers for our text
+            var text_vertices = try std.ArrayList(types.TextVertex).initCapacity(self.allocator, 0);
+            defer text_vertices.deinit(self.allocator);
+            {
+                for (self.nodes) |node| {
+                    try node.appendAllText(self.allocator, self.font_atlas, &text_vertices);
+                }
+
+                const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(self.text_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
             }
 
-            // Record Command Buffer
+            // Reset command buffer for the current frame
             const cmd = self.command_buffers[current_frame];
-            try handleError(c.vkResetCommandBuffer(cmd, 0));
+            try util.resetCommandBuffer(cmd);
+            try util.beginCommandBuffer(cmd);
 
-            const begin_info = c.VkCommandBufferBeginInfo{
-                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                .pNext = null,
-                .flags = 0,
-                .pInheritanceInfo = null,
-            };
-            try handleError(c.vkBeginCommandBuffer(cmd, &begin_info));
-
-            const clear_value = c.VkClearValue{ .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } } };
-            const render_pass_info = c.VkRenderPassBeginInfo{
+            c.vkCmdBeginRenderPass(cmd, &c.VkRenderPassBeginInfo{
                 .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                 .pNext = null,
                 .renderPass = self.render_pass,
                 .framebuffer = self.framebuffers[image_index],
                 .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_extent },
                 .clearValueCount = 1,
-                .pClearValues = &clear_value,
-            };
+                .pClearValues = &c.VkClearValue{
+                    .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } },
+                },
+            }, c.VK_SUBPASS_CONTENTS_INLINE);
 
-            c.vkCmdBeginRenderPass(cmd, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-
-            const viewport = c.VkViewport{
+            c.vkCmdSetViewport(cmd, 0, 1, &c.VkViewport{
                 .x = 0.0,
                 .y = 0,
                 .width = @floatFromInt(self.swap_extent.width),
                 .height = @as(f32, @floatFromInt(self.swap_extent.height)),
                 .minDepth = 0.0,
                 .maxDepth = 1.0,
-            };
-            c.vkCmdSetViewport(cmd, 0, 1, @ptrCast(&viewport));
+            });
 
-            const scissor = c.VkRect2D{
+            c.vkCmdSetScissor(cmd, 0, 1, &c.VkRect2D{
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = self.swap_extent,
-            };
-            c.vkCmdSetScissor(cmd, 0, 1, @ptrCast(&scissor));
+            });
 
             if (quad_vertices.items.len > 0) {
                 const offsets = [_]c.VkDeviceSize{0};
@@ -540,6 +585,24 @@ pub const App = struct {
                 c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
             }
 
+            if (text_vertices.items.len > 0) {
+                const offsets = [_]c.VkDeviceSize{0};
+                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.text_vertex_graphics_pipeline);
+                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.text_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                c.vkCmdBindDescriptorSets(
+                    cmd,
+                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &self.descriptor_sets[current_frame],
+                    0,
+                    null,
+                );
+
+                c.vkCmdDraw(cmd, @intCast(text_vertices.items.len), 1, 0, 0);
+            }
+
             c.vkCmdEndRenderPass(cmd);
             try handleError(c.vkEndCommandBuffer(cmd));
 
@@ -548,11 +611,13 @@ pub const App = struct {
                 .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
                 .pNext = null,
                 .waitSemaphoreCount = 1,
+                // Wait until the image is availible before trying to render
                 .pWaitSemaphores = @ptrCast(&self.image_availible_semaphore[current_frame]),
                 .pWaitDstStageMask = @ptrCast(&wait_stages),
                 .commandBufferCount = 1,
-                .pCommandBuffers = @ptrCast(&cmd),
+                .pCommandBuffers = &cmd,
                 .signalSemaphoreCount = 1,
+                // Signal this when we are done rendering
                 .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
             };
 
@@ -564,6 +629,7 @@ pub const App = struct {
                 .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .pNext = null,
                 .waitSemaphoreCount = 1,
+                // Wait until the image is done rendering before presenting it 
                 .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
                 .swapchainCount = 1,
                 .pSwapchains = @ptrCast(&self.swapchain),
@@ -572,6 +638,7 @@ pub const App = struct {
             };
 
             const present_result = c.vkQueuePresentKHR(self.present_queue, &present_info);
+
             if (present_result == c.VK_ERROR_OUT_OF_DATE_KHR or present_result == c.VK_SUBOPTIMAL_KHR) {
                 window_resized = true;
             } else if (present_result != c.VK_SUCCESS) {
@@ -591,25 +658,28 @@ pub const App = struct {
         std.log.info("Recreating swapchain...", .{});
         errdefer std.log.info("Recreating swapchain failed", .{});
 
+        // Get the new window size from SDL
         var w: c_int = 0;
         var h: c_int = 0;
         _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
         while (w == 0 or h == 0) {
             _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
-            _ = c.SDL_WaitEvent(null); // Pause the thread while minimized
+            _ = c.SDL_WaitEvent(null); 
         }
 
+        // Wait for idle before recreating the swapchian
         _ = c.vkDeviceWaitIdle(self.device);
 
+        // Delete what we had
         util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
         util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
         util.deinitVkImageViews(self.allocator, self.device, self.image_views);
         util.deinitVkImages(self.allocator, self.images);
         util.deinitVkSwapchain(self.device, self.swapchain);
 
+        // Reinitialize
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
         self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
-
         self.swapchain = try util.initVkSwapchain(
             self.device,
             self.surface,
@@ -619,15 +689,19 @@ pub const App = struct {
             self.present_mode,
             self.graphics_queue_index,
             self.present_queue_index,
+            self.swapchain,
         );
         self.images = try util.initVkImages(self.allocator, self.device, self.swapchain);
         self.image_views = try util.initVkImageViews(self.allocator, self.device, self.images, self.surface_format);
         self.framebuffers = try util.initFramebuffers(self.allocator, self.device, self.image_views, self.render_pass, self.swap_extent);
         self.render_finished_semaphore = try util.initVkSemaphores(self.allocator, self.device, self.images.len);
+
         defer std.log.info("Recreating swapchain OK", .{});
     }
 
     pub fn deinit(self: *App) void {
+        defer self.pw_manager.deinit();
+        defer self.frame_arena.deinit();
         defer util.sdlQuit();
         defer util.sdlDestroyWindow(self.window);
         defer util.deinitVkInstance(self.instance);
@@ -640,22 +714,30 @@ pub const App = struct {
         defer util.deinitVkShaderModule(self.device, self.quad_frag_shader);
         defer util.deinitVkShaderModule(self.device, self.bezier_vert_shader);
         defer util.deinitVkShaderModule(self.device, self.bezier_frag_shader);
+        defer util.deinitVkShaderModule(self.device, self.text_vert_shader);
+        defer util.deinitVkShaderModule(self.device, self.text_frag_shader);
         defer util.deinitVkRenderPass(self.device, self.render_pass);
         defer util.deinitVkDescriptorSetLayout(self.device, self.descriptor_set_layout);
         defer util.deinitVkPipelineLayout(self.device, self.pipeline_layout);
         defer util.deinitVkPipeline(self.device, self.quad_vertex_graphics_pipeline);
         defer util.deinitVkPipeline(self.device, self.bezier_vertex_graphics_pipeline);
+        defer util.deinitVkPipeline(self.device, self.text_vertex_graphics_pipeline);
         defer util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
         defer util.deinitCommandPool(self.device, self.command_pool);
         defer util.deinitCommandBuffers(self.allocator, self.command_buffers);
         defer util.deinitUniformBufferSet(self.allocator, self.device, self.uniform_buffer_set);
         defer util.deinitVertexBufferSet(self.allocator, self.device, self.quad_vertex_buffer_set);
         defer util.deinitVertexBufferSet(self.allocator, self.device, self.bezier_vertex_buffer_set);
+        defer util.deinitVertexBufferSet(self.allocator, self.device, self.text_vertex_buffer_set);
         defer util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
         defer util.deinitVkSemaphores(self.allocator, self.device, self.image_availible_semaphore);
         defer util.deinitVkFences(self.allocator, self.device, self.in_flight_fences);
         defer util.deinitVkDescriptorPool(self.device, self.descriptor_pool);
         defer util.deinitVkDescriptorSets(self.allocator, self.descriptor_sets);
+        defer util.deinitTextureImage(self.device, self.font_texture_image.image, self.font_texture_image.image_memory);
+        defer util.deinitVkImageViews(self.allocator, self.device, self.font_texture_view);
+        defer util.deinitTextureSampler(self.device, self.font_sampler);
+        defer self.font_atlas.deinit();
         defer self.allocator.free(self.nodes);
     }
 };

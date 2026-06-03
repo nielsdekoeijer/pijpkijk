@@ -32,6 +32,13 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
                     return error.CError;
                 }
             },
+            inline .pointer => |ptr_info| {
+                _ = ptr_info;
+                if (err == null) {
+                    return error.CError;
+                }
+                return err;
+            },
             inline else => unreachable,
         },
     }

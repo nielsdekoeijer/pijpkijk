@@ -18,6 +18,7 @@ pkgs.stdenv.mkDerivation rec {
   nativeBuildInputs = [
     pkgs.zig
     pkgs.pkg-config
+    pkgs.msdf-atlas-gen
   ];
 
   buildInputs = [

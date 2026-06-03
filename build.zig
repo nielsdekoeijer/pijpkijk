@@ -4,9 +4,12 @@ fn addSlangCompileVertShaderStep(b: *std.Build, src: []const u8, out: []const u8
     const slangc = b.addSystemCommand(&.{
         "slangc",
         src,
-        "-target", "spirv",
-        "-profile", "glsl_450",
-        "-capability", "glsl_spirv_1_0",
+        "-target",
+        "spirv",
+        "-profile",
+        "glsl_450",
+        "-capability",
+        "glsl_spirv_1_0",
         "-entry",
         "main",
         "-stage",
@@ -20,9 +23,12 @@ fn addSlangCompileFragShaderStep(b: *std.Build, src: []const u8, out: []const u8
     const slangc = b.addSystemCommand(&.{
         "slangc",
         src,
-        "-target", "spirv",
-        "-profile", "glsl_450",
-        "-capability", "glsl_spirv_1_0",
+        "-target",
+        "spirv",
+        "-profile",
+        "glsl_450",
+        "-capability",
+        "glsl_spirv_1_0",
         "-entry",
         "main",
         "-stage",
@@ -31,6 +37,27 @@ fn addSlangCompileFragShaderStep(b: *std.Build, src: []const u8, out: []const u8
         out,
     });
     return slangc;
+}
+
+fn addMsdfAtlasGenStep(b: *std.Build, font_src: []const u8, out_png: []const u8, out_json: []const u8) *std.Build.Step.Run {
+    const msdf = b.addSystemCommand(&.{
+        "msdf-atlas-gen",
+        "-font",
+        font_src,
+        "-type",
+        "mtsdf",
+        "-format",
+        "png",
+        "-imageout",
+        out_png,
+        "-json",
+        out_json,
+        "-size",
+        "32",
+        "-pxrange",
+        "4",
+    });
+    return msdf;
 }
 
 pub fn build(b: *std.Build) void {
@@ -47,6 +74,10 @@ pub fn build(b: *std.Build) void {
         .{
             .slang_path = "src/shaders/bezier.vert.slang",
             .spirv_path = "src/shaders/bezier.vert.spirv",
+        },
+        .{
+            .slang_path = "src/shaders/text.vert.slang",
+            .spirv_path = "src/shaders/text.vert.spirv",
         },
     };
 
@@ -67,6 +98,10 @@ pub fn build(b: *std.Build) void {
             .slang_path = "src/shaders/bezier.frag.slang",
             .spirv_path = "src/shaders/bezier.frag.spirv",
         },
+        .{
+            .slang_path = "src/shaders/text.frag.slang",
+            .spirv_path = "src/shaders/text.frag.spirv",
+        },
     };
 
     inline for (frag_shaders) |shader| {
@@ -79,6 +114,27 @@ pub fn build(b: *std.Build) void {
 
     b.getInstallStep().dependOn(slang_step);
 
+    const msdf_step = b.step("compile-fonts", "Compile fonts to MSDF atlases");
+
+    const fonts = .{
+        .{
+            .src_path = "src/fonts/RobotoMono-Regular.ttf",
+            .png_path = "src/fonts/RobotoMono-Regular.png",
+            .json_path = "src/fonts/RobotoMono-Regular.json",
+        },
+    };
+
+    inline for (fonts) |font| {
+        msdf_step.dependOn(&addMsdfAtlasGenStep(
+            b,
+            font.src_path,
+            font.png_path,
+            font.json_path,
+        ).step);
+    }
+
+    b.getInstallStep().dependOn(msdf_step);
+
     const mod = b.addModule("pijpkijk", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -89,11 +145,24 @@ pub fn build(b: *std.Build) void {
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
+    mod.linkSystemLibrary("SDL3_image", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
     mod.linkSystemLibrary("vulkan", .{
         .needed = true,
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
+    mod.linkSystemLibrary("pipewire-0.3", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
+    mod.addIncludePath(
+        b.path("./src/"),
+    );
 
     const exe = b.addExecutable(.{
         .name = "pijpkijk",

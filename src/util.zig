@@ -2,8 +2,80 @@ const c = @import("c.zig").c;
 const std = @import("std");
 const QuadVertex = @import("types.zig").QuadVertex;
 const BezierVertex = @import("types.zig").BezierVertex;
+const TextVertex = @import("types.zig").TextVertex;
 const Uniform = @import("types.zig").Uniform;
 const handleError = @import("error.zig").handleError;
+
+// ====================================================================================================================
+//  [1. PLATFORM & CORE]
+//    SDL3 Window
+//        |
+//    VkInstance ---------------------------> VkSurfaceKHR
+//    (Vulkan API Context)                    (Drawable OS Window Area)
+//        |                                         ^
+//        v                                         |
+//    VkPhysicalDevice (GPU Selection) -------------+ (Checks Queues, Formats, Present Modes)
+//        |
+//        v
+//    VkDevice (Logical Connection)
+//        |--> Graphics Queue (Submits Draw/Copy Commands)
+//        +--> Present Queue  (Submits to Monitor)
+//
+//
+//  [2. SWAPCHAIN & RENDER TARGETS]
+//    VkSwapchainKHR (The queue of images for the monitor)
+//        |
+//        v
+//    []VkImage (Raw pixel memory) ---> []VkImageView (Format/Swizzle wrapper)
+//                                             |
+//    VkRenderPass (Draw/Load/Store Rules)     |
+//        |                                    |
+//        +------------------------------------+
+//        |
+//        v
+//    []VkFramebuffer (The actual canvas targets bound during drawing)
+//
+//
+//  [3. THE GRAPHICS PIPELINE (State Machine)]
+//    VkShaderModule (Vert/Frag) ---+
+//                                  |
+//    VkDescriptorSetLayout --------+--> VkPipelineLayout (Push Constants & Descriptor Signatures)
+//                                  |          |
+//                                  |          v
+//    VkRenderPass -----------------+--> VkPipeline (The locked-in hardware state machine)
+//
+//
+//  [4. RESOURCES & DATA (Memory)]
+//    VkDescriptorPool ---> []VkDescriptorSet (Holds Pointers to Uniforms/Textures for the Shader)
+//                                 |
+//         +-----------------------+-----------------------+
+//         |                                               |
+//         v                                               v
+//    VkBuffer (Uniform/Vertex)                       VkImage (Texture) + VkSampler
+//         |                                               |
+//    VkDeviceMemory (Mapped/Unmapped)                VkDeviceMemory (Device Local)
+//
+//
+//  [5. EXECUTION & SYNCHRONIZATION]
+//    VkCommandPool ---> []VkCommandBuffer (Where you record your actual frame loop)
+//                                 |
+//                                 +--> vkCmdBeginRenderPass    (Uses VkFramebuffer)
+//                                 +--> vkCmdBindPipeline       (Uses VkPipeline)
+//                                 +--> vkCmdBindDescriptorSets (Uses VkDescriptorSet)
+//                                 +--> vkCmdDraw               (Uses VkBuffer/Vertex data)
+//
+//    VkFence     (CPU <-> GPU: Stops CPU from overwriting buffers currently in flight)
+//    VkSemaphore (GPU <-> GPU: Stops Drawing before Image is ready; Stops Present before Draw is done)
+//
+// ====================================================================================================================
+
+/// Memcpy for generic non-slices, defers to zigs built in memcpy by casting pointers to slices. Likely slightly dodgy.
+pub fn memcpy(dst: anytype, src: anytype, byteCount: usize) void {
+    @memcpy(
+        @as([*]u8, @ptrCast(dst))[0..byteCount],
+        @as([*]u8, @ptrCast(@constCast(src)))[0..byteCount],
+    );
+}
 
 // =SDL3===============================================================================================================
 
@@ -61,7 +133,7 @@ pub fn sdlDestroyWindow(window: *c.SDL_Window) void {
 
 // =VkInstance=========================================================================================================
 // Creating a vulkan instance, where we are essentially registering ourselves with the vulkan libraries on the system.
-// To do this, we must specify what features we wish to use and information about our application
+// To do this, we must specify what features we wish to use, and some information about our application.
 
 /// Debug callback injectable into vulkan
 pub export fn vkDebugCallback(
@@ -235,7 +307,7 @@ fn checkRequestedVkInstanceLayersSupported(
     defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
 }
 
-/// Initialize vulkan instance
+/// Initialize vulkan instance with our required features and details
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
 ) !c.VkInstance {
@@ -259,7 +331,7 @@ pub fn initVkInstance(
         try checkRequestedVkInstanceLayersSupported(allocator, layers.items);
     }
 
-    // handler
+    // handler for debug, on release builds we disable the validation layers
     const debug_messenger = blk: {
         if (@import("builtin").mode == .Debug) {
             break :blk &c.VkDebugUtilsMessengerCreateInfoEXT{
@@ -336,7 +408,7 @@ pub fn deinitVkInstance(
 // =VkSurface==========================================================================================================
 // The surface is the thing we draw onto.
 
-/// Initialize vulkan surface from SDL3
+/// Initialize vulkan surface from an SDL3 window
 pub fn initVkSurface(
     window: *c.SDL_Window,
     instance: c.VkInstance,
@@ -364,9 +436,10 @@ pub fn deinitVkSurface(
 }
 
 // =VkPhysicalDevice===================================================================================================
-// This selects the specific gpu we want to use
+// This specifies the specific gpu we want to use.
 
-/// Initialize a vulkan physical device
+/// Initialize and select a vulkan physical device based on our requirements. If multiple GPUs meet our requirements,
+/// select one based on somewhat ad-hoc criteria.
 pub fn initVkPhysicalDevice(
     allocator: std.mem.Allocator,
     instance: c.VkInstance,
@@ -525,8 +598,8 @@ pub fn initVkPhysicalDevice(
 }
 
 // =VkSurfaceCapabilities==============================================================================================
-// This function takes the specified VkPhysicalDevice and VkSurfaceKHR window surface into account when determining
-// the supported capabilities.
+// Describes some properties of our surface, such as the min, max and current size. Used in swapchain creation and
+// window extend calculation.
 
 /// Gets a vulkan extent containing the surface dimensions from an SDL window
 pub fn getVkExtentFromSDLWindow(
@@ -590,8 +663,8 @@ pub fn getPhysicalDeviceSurfaceCapabilities(
 }
 
 // =VkSurfaceFormat====================================================================================================
-// The Surface Format (VkSurfaceFormatKHR) dictates exactly how color data is stored in memory and how the monitor
-// should interpret that data.
+// The Surface Format (VkSurfaceFormatKHR) dictates the format (layout of bits per pixel foramt) and the color space
+// (the interpretation of the colors for display on the monitor). Used in swapchain, render pass, and image creation.
 
 /// Get a list of surface formats supported by our physical device
 fn getSupportedVkDeviceSurfaceFormats(
@@ -613,7 +686,8 @@ fn getSupportedVkDeviceSurfaceFormats(
     return surface_formats;
 }
 
-/// Select the preferred surface format from the supported formats
+/// Select the preferred surface format from the supported formats. By default, we choose `VK_FORMAT_B8G8R8A8_SRGB`
+/// and `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`. If the supported format is not there, we justs select the first one.
 fn selectPreferredSurfaceFormat(
     supportedFormats: []c.VkSurfaceFormatKHR,
 ) c.VkSurfaceFormatKHR {
@@ -641,7 +715,7 @@ fn selectPreferredSurfaceFormat(
     return supportedFormats[0];
 }
 
-/// Get a preferred surface format
+/// Get a preferred surface format from the supported formats
 pub fn getPreferredVkSurfaceFormat(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -652,11 +726,7 @@ pub fn getPreferredVkSurfaceFormat(
     std.log.debug("Trying to get preferred surface format...", .{});
     errdefer std.log.err("Trying to get preferred surface format failed", .{});
 
-    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(
-        allocator,
-        physical_device,
-        surface,
-    );
+    const supportedSurfaceFormats = try getSupportedVkDeviceSurfaceFormats(allocator, physical_device, surface);
     defer allocator.free(supportedSurfaceFormats);
 
     surface_format = selectPreferredSurfaceFormat(supportedSurfaceFormats);
@@ -667,7 +737,8 @@ pub fn getPreferredVkSurfaceFormat(
 }
 
 // =VkPresentMode======================================================================================================
-// The Present mode dictates when and how the images you render are handed over to the monitor.
+// The Present mode dictates when and how the images you render are handed over to the monitor by the swapchain. Used
+// during swapchain creation.
 
 /// Get a list of present modes supported by our physical devices
 fn getSupportedVkDeviceSurfacePresentModes(
@@ -683,6 +754,8 @@ fn getSupportedVkDeviceSurfacePresentModes(
     std.log.debug("Vulkan reports '{}' device surfaces present modes in total", .{count});
 
     const surfacePresentModes = try allocator.alloc(c.VkPresentModeKHR, count);
+    errdefer allocator.free(surfacePresentModes);
+
     try handleError(c.vkGetPhysicalDeviceSurfacePresentModesKHR(
         physical_device,
         surface,
@@ -694,7 +767,9 @@ fn getSupportedVkDeviceSurfacePresentModes(
     return surfacePresentModes;
 }
 
-/// Select the preferred present mode from the supported formats
+/// Select the preferred present mode from the supported formats. By default, we choose `VK_PRESENT_MODE_MAILBOX_KHR`
+/// which is triple buffering. As a backup, we choose `VK_PRESENT_MODE_FIFO_KHR` which is vsync, which should always
+/// work.
 fn selectPreferredSurfacePresentMode(
     supported_present_modes: []c.VkPresentModeKHR,
 ) c.VkPresentModeKHR {
@@ -712,6 +787,7 @@ fn selectPreferredSurfacePresentMode(
         }
     }
 
+    // Note that this is ALWAYS availible.
     selected_mode = c.VK_PRESENT_MODE_FIFO_KHR;
     defer std.log.debug("Selecting present mode 'VK_PRESENT_MODE_FIFO_KHR'", .{});
 
@@ -746,8 +822,11 @@ pub fn getPreferredVkPresentMode(
 
 // =VkQueueFamilies====================================================================================================
 // In vulkan, if we want to interact with the physical device, it is done so through queues. We essentially submit
-// commands to queues.
+// commands to queues, and the queue families indicate which queues are availible. Used in device creation to tell
+// vulkan which queues we want, in swapchain creation to determine the image sharing mode, and in command pool
+// creation.
 
+/// Get all availible queue family properties
 fn getQueueFamilyProperties(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -758,12 +837,14 @@ fn getQueueFamilyProperties(
     var count: u32 = 0;
     c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, null);
     const queue_family_properties = try allocator.alloc(c.VkQueueFamilyProperties, count);
+    errdefer allocator.free(queue_family_properties);
     c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_family_properties.ptr);
 
     defer std.log.debug("Trying to get all queue family properties OK", .{});
     return queue_family_properties;
 }
 
+/// Find the first graphics queue index from the properties
 pub fn findGraphicsQueueIndex(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -795,6 +876,7 @@ pub fn findGraphicsQueueIndex(
     return graphics_queue_index;
 }
 
+/// Find the first present queue index from the properties
 pub fn findPresentQueueIndex(
     allocator: std.mem.Allocator,
     surface: c.VkSurfaceKHR,
@@ -838,6 +920,7 @@ pub fn findPresentQueueIndex(
 // This is the logical device which we use to interface with the physical device. It describes the features we want to
 // use from the physical device.
 
+/// Gets a list of all supported vulkan device layers
 fn getSupportedVkDeviceLayers(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -872,6 +955,7 @@ fn getSupportedVkDeviceLayers(
     return layers;
 }
 
+/// Checks if the requested device layers are supported
 fn checkRequestedVkDeviceLayersSupported(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -906,6 +990,7 @@ fn checkRequestedVkDeviceLayersSupported(
     defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
 }
 
+/// Gets a list of all supported device extensions
 fn getSupportedVkDeviceExtensions(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -937,6 +1022,7 @@ fn getSupportedVkDeviceExtensions(
     return extensions;
 }
 
+/// Checks if the requested device extensions are supported
 fn checkRequestedVkDeviceExtensionsSupported(
     allocator: std.mem.Allocator,
     physical_device: c.VkPhysicalDevice,
@@ -971,6 +1057,7 @@ fn checkRequestedVkDeviceExtensionsSupported(
     defer std.log.debug("Trying to checking if requested vulkan device extensions are supported OK", .{});
 }
 
+/// Initializes a handle to the physical device and create the device queues we want.
 pub fn initVkDevice(
     allocator: std.mem.Allocator,
     graphics_queue_index: u32,
@@ -1056,6 +1143,7 @@ pub fn initVkDevice(
     return device;
 }
 
+/// Deinitializes a handle to the physical device
 pub fn deinitVkDevice(device: c.VkDevice) void {
     c.vkDestroyDevice(device, null);
 
@@ -1066,6 +1154,7 @@ pub fn deinitVkDevice(device: c.VkDevice) void {
 // The swapchain is the agreement between Vulkan and your operating system on how the pixels should be displayed.
 // Provides the images that we draw on.
 
+/// Initializes a vulkan swap chain with our given configuration
 pub fn initVkSwapchain(
     device: c.VkDevice,
     surface: c.VkSurfaceKHR,
@@ -1075,12 +1164,14 @@ pub fn initVkSwapchain(
     present_mode: c.VkPresentModeKHR,
     graphics_queue_index: u32,
     present_queue_index: u32,
+    previous_swapchain: c.VkSwapchainKHR,
 ) !c.VkSwapchainKHR {
     var swapchain: c.VkSwapchainKHR = undefined;
 
     std.log.info("Trying to init vulkan swapchain...", .{});
     errdefer std.log.err("Trying to init vulkan swapchain failed", .{});
 
+    //
     const image_sharing_mode: u32 = blk: {
         if (graphics_queue_index != present_queue_index) {
             break :blk c.VK_SHARING_MODE_CONCURRENT;
@@ -1098,7 +1189,7 @@ pub fn initVkSwapchain(
     };
 
     const queue_pair = [_]u32{ graphics_queue_index, present_queue_index };
-    const pQueueFamilyIndices: [*c]const u32 = blk: {
+    const queue_family_indices: [*c]const u32 = blk: {
         if (graphics_queue_index != present_queue_index) {
             break :blk &queue_pair;
         } else {
@@ -1112,26 +1203,38 @@ pub fn initVkSwapchain(
         .pNext = null,
         .flags = 0,
         .surface = surface,
+        // minimum amount of images required by the surface
         .minImageCount = surface_capabilities.minImageCount,
+        // memory layout of the colors of the image
         .imageFormat = surface_format.format,
         .imageColorSpace = surface_format.colorSpace,
+        // size of our window
         .imageExtent = swap_extent,
+        // only 2 for e.g. VR
         .imageArrayLayers = 1,
+        // tell the GPU we intend to draw onto the image
         .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        // if we need to account (synchronization wise) for the two queues to be the same (faster if not)
         .imageSharingMode = @intCast(image_sharing_mode),
         .queueFamilyIndexCount = @intCast(queue_family_index_count),
-        .pQueueFamilyIndices = pQueueFamilyIndices,
+        .pQueueFamilyIndices = queue_family_indices,
+        // e.g. rotate the image or not, we leave it the same
         .preTransform = surface_capabilities.currentTransform,
+        // if the window itself is see through, e.g. for a terminal with transparency
         .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        // triple buffering or vsync, etc.
         .presentMode = present_mode,
+        // skip running fragment shader for obscured pixels
         .clipped = c.VK_TRUE,
-        .oldSwapchain = null,
+        // for re-use of system resources
+        .oldSwapchain = previous_swapchain,
     }, null, &swapchain));
 
     defer std.log.info("Trying to init vulkan swapchain OK", .{});
     return swapchain;
 }
 
+/// Deinitializes a vulkan swap chain
 pub fn deinitVkSwapchain(
     device: c.VkDevice,
     swapchain: c.VkSwapchainKHR,
@@ -1143,7 +1246,7 @@ pub fn deinitVkSwapchain(
 // =VkImages===========================================================================================================
 // Images are that which we draw on, an image view references a specific part of an image to be used
 
-/// Memory of the image inside the swapchain
+/// Initializes handle to the image inside the swapchain. The image can be understood to be the raw memory on the GPU.
 pub fn initVkImages(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
@@ -1172,6 +1275,7 @@ pub fn deinitVkImages(
     defer std.log.info("Deinit images OK", .{});
 }
 
+/// Initializes views to images. The view adds an interpretation to the image through the surface format.
 pub fn initVkImageViews(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
@@ -1181,7 +1285,7 @@ pub fn initVkImageViews(
     std.log.info("Trying to get image views...", .{});
     errdefer std.log.info("Trying to get image views failed", .{});
 
-    const vkImageViews = try allocator.alloc(c.VkImageView, images.len);
+    const image_views = try allocator.alloc(c.VkImageView, images.len);
     for (0..images.len) |i| {
         try handleError(
             c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
@@ -1189,8 +1293,11 @@ pub fn initVkImageViews(
                 .pNext = null,
                 .flags = 0,
                 .image = images[i],
+                // Treat image memory as a 2D image
                 .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+                // Forward our format
                 .format = surface_format.format,
+                // Hot-swap the colors as you read them, can be useful e.g. for a monochrome effect apparently
                 .components = c.VkComponentMapping{
                     .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
                     .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -1198,32 +1305,36 @@ pub fn initVkImageViews(
                     .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
                 },
                 .subresourceRange = c.VkImageSubresourceRange{
+                    // This is a view into the color part, could also be for example the stencil or depth parts!
                     .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
                     .baseMipLevel = 0,
                     .levelCount = 1,
                     .baseArrayLayer = 0,
                     .layerCount = 1,
                 },
-            }, null, &vkImageViews[i]),
+            }, null, &image_views[i]),
         );
     }
 
     defer std.log.info("Trying to get image views OK", .{});
-    return vkImageViews;
+    return image_views;
 }
 
-pub fn deinitVkImageViews(allocator: std.mem.Allocator, device: c.VkDevice, vkImageViews: []c.VkImageView) void {
-    for (0..vkImageViews.len) |i| {
-        c.vkDestroyImageView(device, vkImageViews[i], null);
+/// Deinitializes views to images
+pub fn deinitVkImageViews(allocator: std.mem.Allocator, device: c.VkDevice, image_views: []c.VkImageView) void {
+    for (0..image_views.len) |i| {
+        c.vkDestroyImageView(device, image_views[i], null);
     }
-    allocator.free(vkImageViews);
+    allocator.free(image_views);
 
     defer std.log.info("Deinit image views OK", .{});
 }
 
-// =Shaders============================================================================================================
-// The Shaders are the code that we run on the GPU
+// =VkPipeline=========================================================================================================
+// Describes the configurable state of the graphics card, like the viewport size and depth buffer operation and the
+// programmable state using shaders.
 
+/// Initialize a shader
 pub fn initVkShaderModule(comptime path: anytype, device: c.VkDevice) !c.VkShaderModule {
     var shader_module: c.VkShaderModule = undefined;
 
@@ -1246,18 +1357,17 @@ pub fn initVkShaderModule(comptime path: anytype, device: c.VkDevice) !c.VkShade
     return shader_module;
 }
 
+/// Deinitialize a shader
 pub fn deinitVkShaderModule(
     device: c.VkDevice,
-    vkShaderModule: c.VkShaderModule,
+    shader_module: c.VkShaderModule,
 ) void {
-    c.vkDestroyShaderModule(device, vkShaderModule, null);
+    c.vkDestroyShaderModule(device, shader_module, null);
 
     defer std.log.info("Deinit vulkan shader module OK", .{});
 }
 
-// =VkRenderPass=======================================================================================================
-// Render passes in Vulkan describe the type of images that are used during rendering operations,
-
+/// Initializes render passes, describes how the graphics pipeline will interact with the framebuffer.
 pub fn initVkRenderPass(
     device: c.VkDevice,
     surface_format: c.VkSurfaceFormatKHR,
@@ -1273,38 +1383,55 @@ pub fn initVkRenderPass(
             .pNext = null,
             .flags = 0,
             .attachmentCount = 1,
+            // Canvassas we will draw on. One can have mutliple in the case of e.g. a depth buffer, deferred
+            // rendering, multi-sample anti-aliasing, or post processing like bloom.
             .pAttachments = &[_]c.VkAttachmentDescription{
                 c.VkAttachmentDescription{
                     .flags = 0,
+                    // Forward the format
                     .format = surface_format.format,
+                    // Number of samples to write, multiple samples used e.g. for anti-aliasing
                     .samples = c.VK_SAMPLE_COUNT_1_BIT,
+                    // What to do BEFORE we start drawing
                     .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    // What to do AFTER we finish drawing
                     .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+                    // Stencil buffer behaviour
                     .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                     .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    // The layout how it starts, in this case we say we don't care
                     .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                    // The layout how it should be at the end, in this case presenting
                     .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 },
             },
             .subpassCount = 1,
+            // GPU can do multiple passes, they are specified here
             .pSubpasses = &[_]c.VkSubpassDescription{
                 c.VkSubpassDescription{
                     .flags = 0,
+                    // Specify the type of pipeline, compute or graphics (or raytracing for example)
                     .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    // For reading from a pass before our render pass
                     .inputAttachmentCount = 0,
                     .pInputAttachments = null,
+                    // Specify what attachement we will attach to, specified above
                     .colorAttachmentCount = 1,
                     .pColorAttachments = &c.VkAttachmentReference{
                         .attachment = 0,
                         .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     },
+                    // How to resolve e.g. 4 samples down to 1 (e.g. MSAA)
                     .pResolveAttachments = null,
                     .pDepthStencilAttachment = null,
                     .preserveAttachmentCount = 0,
+                    // Attachments that the current subpass is not using, but may be used by other subpasses, thus need
+                    // be preserved.
                     .pPreserveAttachments = null,
                 },
             },
             .dependencyCount = 1,
+            // To do with synchronization, to ensure vulkan doesn't overwrite what e.g. the monitor is still reading.
             .pDependencies = &c.VkSubpassDependency{
                 .srcSubpass = c.VK_SUBPASS_EXTERNAL,
                 .dstSubpass = 0,
@@ -1317,25 +1444,26 @@ pub fn initVkRenderPass(
         }, null, &render_pass),
     );
 
-    defer std.log.info("Trying to init render pass...", .{});
+    defer std.log.info("Trying to init render pass OK", .{});
     return render_pass;
 }
 
+/// Deinitializes a render pass
 pub fn deinitVkRenderPass(
     device: c.VkDevice,
-    vkRenderPass: c.VkRenderPass,
+    render_pass: c.VkRenderPass,
 ) void {
-    c.vkDestroyRenderPass(device, vkRenderPass, null);
+    c.vkDestroyRenderPass(device, render_pass, null);
 
     defer std.log.info("Deinit vulkan render pass OK", .{});
 }
 
-// =VkDescriptorSet====================================================================================================
-
+/// Intializes a descriptor set, which specifies the external data to be used by our shaders, e.g. UBOs, push
+/// constants, and textures.
 pub fn initVkDescriptorSetLayout(
     device: c.VkDevice,
 ) !c.VkDescriptorSetLayout {
-    var vkDescriptorSetLayout: c.VkDescriptorSetLayout = undefined;
+    var descriptor_set_layout: c.VkDescriptorSetLayout = undefined;
 
     std.log.info("Trying to init vulkan descriptor set layout...", .{});
     errdefer std.log.err("Trying to init vulkan descriptor set layout", .{});
@@ -1346,7 +1474,7 @@ pub fn initVkDescriptorSetLayout(
             .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .bindingCount = 1,
+            .bindingCount = 2,
             .pBindings = &[_]c.VkDescriptorSetLayoutBinding{
                 c.VkDescriptorSetLayoutBinding{
                     .binding = 0,
@@ -1355,30 +1483,35 @@ pub fn initVkDescriptorSetLayout(
                     .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
                     .pImmutableSamplers = null,
                 },
+                c.VkDescriptorSetLayoutBinding{
+                    .binding = 1,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .pImmutableSamplers = null,
+                },
             },
         },
         null,
-        &vkDescriptorSetLayout,
+        &descriptor_set_layout,
     ));
 
     defer std.log.info("Trying to init vulkan descriptor set layout OK", .{});
-    return vkDescriptorSetLayout;
+    return descriptor_set_layout;
 }
 
-pub fn deinitVkDescriptorSetLayout(device: c.VkDevice, vkDescriptorSetLayout: c.VkDescriptorSetLayout) void {
-    c.vkDestroyDescriptorSetLayout(device, vkDescriptorSetLayout, null);
+/// Deinitializes descriptor sets
+pub fn deinitVkDescriptorSetLayout(device: c.VkDevice, descriptor_set_layout: c.VkDescriptorSetLayout) void {
+    c.vkDestroyDescriptorSetLayout(device, descriptor_set_layout, null);
     std.log.info("Deinit descriptor set layout OK", .{});
 }
 
-// =VkPipeline=========================================================================================================
-// Describes the configurable state of the graphics card, like the viewport size and depth buffer operation and the
-// programmable state using shaders.
-
+/// Intialize the pipeline layout
 pub fn initVkPipelineLayout(
     device: c.VkDevice,
-    vkDescriptorSetLayout: c.VkDescriptorSetLayout,
+    descriptor_set_layout: c.VkDescriptorSetLayout,
 ) !c.VkPipelineLayout {
-    var vkPipelineLayout: c.VkPipelineLayout = undefined;
+    var pipeline_layout: c.VkPipelineLayout = undefined;
 
     std.log.info("Trying to init pipeline layout...", .{});
     errdefer std.log.info("Trying to init pipeline layout failed", .{});
@@ -1390,32 +1523,38 @@ pub fn initVkPipelineLayout(
             .pNext = null,
             .flags = 0,
             .setLayoutCount = 1,
-            .pSetLayouts = &vkDescriptorSetLayout,
+            .pSetLayouts = &descriptor_set_layout,
             .pushConstantRangeCount = 0,
             .pPushConstantRanges = null,
         },
         null,
-        &vkPipelineLayout,
+        &pipeline_layout,
     ));
 
     defer std.log.info("Trying to init pipeline layout OK", .{});
-    return vkPipelineLayout;
+    return pipeline_layout;
 }
 
+/// Deinitialize the pipeline layout
 pub fn deinitVkPipelineLayout(
     device: c.VkDevice,
-    vkPipelineLayout: c.VkPipelineLayout,
+    pipeline_layout: c.VkPipelineLayout,
 ) void {
-    c.vkDestroyPipelineLayout(device, vkPipelineLayout, null);
+    c.vkDestroyPipelineLayout(device, pipeline_layout, null);
     defer std.log.info("Deinit vulkan pipeline layout OK", .{});
 }
 
+// =SpecificPipelines==================================================================================================
+// We have multiple pipelines to draw our setup. They overlap greatly, but I have seperated them in seperate functions
+// in order to maximize flexibility. Probably not needed though.
+
+/// Pipeline for drawing the nodes
 pub fn initQuadVertexVkGraphicsPipeline(
     device: c.VkDevice,
-    vkRenderPass: c.VkRenderPass,
-    vkPipelineLayout: c.VkPipelineLayout,
-    vkShaderModuleVert: c.VkShaderModule,
-    vkShaderModuleFrag: c.VkShaderModule,
+    render_pass: c.VkRenderPass,
+    pipeline_layout: c.VkPipelineLayout,
+    shader_module_vert: c.VkShaderModule,
+    shader_module_frag: c.VkShaderModule,
 ) !c.VkPipeline {
     var vkGraphicsPipeline: c.VkPipeline = undefined;
 
@@ -1434,6 +1573,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
             .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
+            // Specify the stages for our shaders, e.g. vertex, fragment, wiring up the shaders
             .stageCount = 2,
             .pStages = &[_]c.VkPipelineShaderStageCreateInfo{
                 c.VkPipelineShaderStageCreateInfo{
@@ -1441,7 +1581,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                     .pNext = null,
                     .flags = 0,
                     .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
-                    .module = vkShaderModuleVert,
+                    .module = shader_module_vert,
                     .pName = "main",
                     .pSpecializationInfo = null,
                 },
@@ -1450,11 +1590,12 @@ pub fn initQuadVertexVkGraphicsPipeline(
                     .pNext = null,
                     .flags = 0,
                     .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .module = vkShaderModuleFrag,
+                    .module = shader_module_frag,
                     .pName = "main",
                     .pSpecializationInfo = null,
                 },
             },
+            // Tell the GPU how to read the vertex memory
             .pVertexInputState = &c.VkPipelineVertexInputStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1464,6 +1605,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .vertexAttributeDescriptionCount = vertex_attr.len,
                 .pVertexAttributeDescriptions = &vertex_attr,
             },
+            // Essentially we specify we are doing triangles here
             .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1472,6 +1614,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .primitiveRestartEnable = c.VK_FALSE,
             },
             .pTessellationState = null,
+            // We null the viewport state because we use the dynamics instead
             .pViewportState = &c.VkPipelineViewportStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1481,13 +1624,16 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .scissorCount = 1,
                 .pScissors = null,
             },
+            // Defines how triangles are to be transfomred to
             .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
                 .depthClampEnable = c.VK_FALSE,
                 .rasterizerDiscardEnable = 0.0,
+                // Specify how to fill the space in between (or not, wireframe-ish)
                 .polygonMode = c.VK_POLYGON_MODE_FILL,
+                // Can be useful to cull "backsides" of triangles
                 .cullMode = c.VK_CULL_MODE_NONE,
                 .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
                 .depthBiasEnable = c.VK_FALSE,
@@ -1496,6 +1642,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .depthBiasSlopeFactor = 0.0,
                 .lineWidth = 1.0,
             },
+            // We dont do mutlisampling
             .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1507,6 +1654,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .alphaToCoverageEnable = c.VK_FALSE,
                 .alphaToOneEnable = c.VK_FALSE,
             },
+            // We dont do depth testing
             .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1521,6 +1669,7 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .minDepthBounds = 0,
                 .maxDepthBounds = 1,
             },
+            // How to merge the result of the fragment shader with the previous pixel that is already there
             .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1541,6 +1690,9 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 },
                 .blendConstants = [4]f32{ 0, 0, 0, 0 },
             },
+            // Us stating that we will manually specify the viewport sizes before rendering. This means that we
+            // dont have to recreate the GRAPHICS PIPELINES on viewport chnanges! Note that we will still need to
+            // recreate the swapchain regardless.
             .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                 .pNext = null,
@@ -1551,8 +1703,8 @@ pub fn initQuadVertexVkGraphicsPipeline(
                     c.VK_DYNAMIC_STATE_SCISSOR,
                 },
             },
-            .layout = vkPipelineLayout,
-            .renderPass = vkRenderPass,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
             .subpass = 0,
             .basePipelineHandle = null,
             .basePipelineIndex = -1,
@@ -1565,12 +1717,13 @@ pub fn initQuadVertexVkGraphicsPipeline(
     return vkGraphicsPipeline;
 }
 
+/// Pipeline for drawing the connections
 pub fn initBezierVertexVkGraphicsPipeline(
     device: c.VkDevice,
-    vkRenderPass: c.VkRenderPass,
-    vkPipelineLayout: c.VkPipelineLayout,
-    vkShaderModuleVert: c.VkShaderModule,
-    vkShaderModuleFrag: c.VkShaderModule,
+    render_pass: c.VkRenderPass,
+    pipeline_layout: c.VkPipelineLayout,
+    shader_module_vert: c.VkShaderModule,
+    shader_module_frag: c.VkShaderModule,
 ) !c.VkPipeline {
     var vkGraphicsPipeline: c.VkPipeline = undefined;
 
@@ -1596,7 +1749,7 @@ pub fn initBezierVertexVkGraphicsPipeline(
                     .pNext = null,
                     .flags = 0,
                     .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
-                    .module = vkShaderModuleVert,
+                    .module = shader_module_vert,
                     .pName = "main",
                     .pSpecializationInfo = null,
                 },
@@ -1605,7 +1758,7 @@ pub fn initBezierVertexVkGraphicsPipeline(
                     .pNext = null,
                     .flags = 0,
                     .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .module = vkShaderModuleFrag,
+                    .module = shader_module_frag,
                     .pName = "main",
                     .pSpecializationInfo = null,
                 },
@@ -1706,8 +1859,164 @@ pub fn initBezierVertexVkGraphicsPipeline(
                     c.VK_DYNAMIC_STATE_SCISSOR,
                 },
             },
-            .layout = vkPipelineLayout,
-            .renderPass = vkRenderPass,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        },
+        null,
+        &vkGraphicsPipeline,
+    ));
+
+    defer std.log.info("Trying to init graphics pipeline...", .{});
+    return vkGraphicsPipeline;
+}
+
+/// Pipeline for drawing the text
+pub fn initTextVertexVkGraphicsPipeline(
+    device: c.VkDevice,
+    render_pass: c.VkRenderPass,
+    pipeline_layout: c.VkPipelineLayout,
+    shader_module_vert: c.VkShaderModule,
+    shader_module_frag: c.VkShaderModule,
+) !c.VkPipeline {
+    var vkGraphicsPipeline: c.VkPipeline = undefined;
+
+    std.log.info("Trying to init graphics pipeline...", .{});
+    errdefer std.log.info("Trying to init graphics pipeline failed", .{});
+
+    //
+    const vertex_bind = TextVertex.getVkBindingDiscription();
+    const vertex_attr = TextVertex.getVkAttributeDiscription();
+
+    try handleError(c.vkCreateGraphicsPipelines(
+        device,
+        null,
+        1,
+        &c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &[_]c.VkPipelineShaderStageCreateInfo{
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = shader_module_vert,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                c.VkPipelineShaderStageCreateInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = shader_module_frag,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            },
+            .pVertexInputState = &c.VkPipelineVertexInputStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .vertexBindingDescriptionCount = vertex_bind.len,
+                .pVertexBindingDescriptions = &vertex_bind,
+                .vertexAttributeDescriptionCount = vertex_attr.len,
+                .pVertexAttributeDescriptions = &vertex_attr,
+            },
+            .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                .primitiveRestartEnable = c.VK_FALSE,
+            },
+            .pTessellationState = null,
+            .pViewportState = &c.VkPipelineViewportStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .viewportCount = 1,
+                .pViewports = null,
+                .scissorCount = 1,
+                .pScissors = null,
+            },
+            .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthClampEnable = c.VK_FALSE,
+                .rasterizerDiscardEnable = 0.0,
+                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .cullMode = c.VK_CULL_MODE_NONE,
+                .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                .depthBiasEnable = c.VK_FALSE,
+                .depthBiasConstantFactor = 0.0,
+                .depthBiasClamp = 0.0,
+                .depthBiasSlopeFactor = 0.0,
+                .lineWidth = 1.0,
+            },
+            .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+                .sampleShadingEnable = c.VK_FALSE,
+                .minSampleShading = 1.0,
+                .pSampleMask = null,
+                .alphaToCoverageEnable = c.VK_FALSE,
+                .alphaToOneEnable = c.VK_FALSE,
+            },
+            .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .depthTestEnable = c.VK_FALSE,
+                .depthWriteEnable = c.VK_FALSE,
+                .depthCompareOp = c.VK_COMPARE_OP_LESS,
+                .depthBoundsTestEnable = c.VK_FALSE,
+                .stencilTestEnable = c.VK_FALSE,
+                .front = .{},
+                .back = .{},
+                .minDepthBounds = 0,
+                .maxDepthBounds = 1,
+            },
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .logicOpEnable = c.VK_FALSE,
+                .logicOp = c.VK_LOGIC_OP_COPY,
+                .attachmentCount = 1,
+                .pAttachments = &c.VkPipelineColorBlendAttachmentState{
+                    .blendEnable = c.VK_TRUE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .colorBlendOp = c.VK_BLEND_OP_ADD,
+                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .alphaBlendOp = c.VK_BLEND_OP_ADD,
+                    .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | //
+                        c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+                },
+                .blendConstants = [4]f32{ 0, 0, 0, 0 },
+            },
+            .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .dynamicStateCount = 2,
+                .pDynamicStates = &[_]c.VkDynamicState{
+                    c.VK_DYNAMIC_STATE_VIEWPORT,
+                    c.VK_DYNAMIC_STATE_SCISSOR,
+                },
+            },
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
             .subpass = 0,
             .basePipelineHandle = null,
             .basePipelineIndex = -1,
@@ -1728,32 +2037,33 @@ pub fn deinitVkPipeline(device: c.VkDevice, vkPipeline: c.VkPipeline) void {
 // =FrameBuffers=======================================================================================================
 //  The framebuffer references image views that are to be used for color, depth and stencil targets
 
+/// Initializes a framebuffer, which is an image view prepared to be drawn on
 pub fn initFramebuffers(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
-    vkImageViews: []c.VkImageView,
-    vkRenderPass: c.VkRenderPass,
-    swapchainExtent: c.VkExtent2D,
+    image_views: []c.VkImageView,
+    render_pass: c.VkRenderPass,
+    swapchain_extent: c.VkExtent2D,
 ) ![]c.VkFramebuffer {
     std.log.info("Trying to init framebuffers...", .{});
     errdefer std.log.info("Trying to init framebuffers failed", .{});
 
-    var vkFramebuffers = try allocator.alloc(c.VkFramebuffer, vkImageViews.len);
+    var vkFramebuffers = try allocator.alloc(c.VkFramebuffer, image_views.len);
 
-    for (0..vkImageViews.len) |i| {
+    for (0..image_views.len) |i| {
         try handleError(c.vkCreateFramebuffer(
             device,
             &c.VkFramebufferCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .renderPass = vkRenderPass,
+                .renderPass = render_pass,
                 .attachmentCount = 1,
                 .pAttachments = &[_]c.VkImageView{
-                    vkImageViews[i],
+                    image_views[i],
                 },
-                .width = swapchainExtent.width,
-                .height = swapchainExtent.height,
+                .width = swapchain_extent.width,
+                .height = swapchain_extent.height,
                 .layers = 1,
             },
             null,
@@ -1783,11 +2093,12 @@ pub fn deinitFramebuffers(
 // Operations in Vulkan that we want to execute, like drawing operations, need to be submitted to a queue. These
 // operations first need to be recorded into a VkCommandBuffer before they can be submitted.
 
+/// Initialize a command pool, which can be used to create command buffers
 pub fn initCommandPool(
     device: c.VkDevice,
-    selectedGraphicsQueueIndex: u32,
+    selected_graphics_queue_index: u32,
 ) !c.VkCommandPool {
-    var vkCommandPool: c.VkCommandPool = undefined;
+    var command_pool: c.VkCommandPool = undefined;
 
     std.log.info("Trying to init command pool...", .{});
     errdefer std.log.info("Trying to init command pool failed", .{});
@@ -1798,42 +2109,45 @@ pub fn initCommandPool(
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext = null,
             .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = selectedGraphicsQueueIndex,
+            .queueFamilyIndex = selected_graphics_queue_index,
         },
         null,
-        &vkCommandPool,
+        &command_pool,
     ));
 
     defer std.log.info("Trying to init command pool OK", .{});
-    return vkCommandPool;
+    return command_pool;
 }
 
-pub fn deinitCommandPool(device: c.VkDevice, vkCommandPool: c.VkCommandPool) void {
-    c.vkDestroyCommandPool(device, vkCommandPool, null);
+/// Deinitializes a command pool
+pub fn deinitCommandPool(device: c.VkDevice, command_pool: c.VkCommandPool) void {
+    c.vkDestroyCommandPool(device, command_pool, null);
     defer std.log.info("Deinit vulkan command pool OK", .{});
 }
 
 pub fn initCommandBuffers(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
-    vkCommandPool: c.VkCommandPool,
-    bufferCount: usize,
+    command_pool: c.VkCommandPool,
+    buffer_count: usize,
 ) ![]c.VkCommandBuffer {
     var vkCommandBuffers: []c.VkCommandBuffer = undefined;
 
     std.log.info("Trying to init command buffers...", .{});
     errdefer std.log.info("Trying to init command buffers failed", .{});
 
-    vkCommandBuffers = try allocator.alloc(c.VkCommandBuffer, bufferCount);
+    vkCommandBuffers = try allocator.alloc(c.VkCommandBuffer, buffer_count);
 
     try handleError(c.vkAllocateCommandBuffers(
         device,
         &c.VkCommandBufferAllocateInfo{
             .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
-            .commandPool = vkCommandPool,
+            .commandPool = command_pool,
+            // Secondary buffers can be issued by multiple threads, which can then be invoked by a primary. Instead,
+            // we can also just write directly to the primary.
             .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = @intCast(bufferCount),
+            .commandBufferCount = @intCast(buffer_count),
         },
         vkCommandBuffers.ptr,
     ));
@@ -1853,13 +2167,13 @@ pub fn deinitCommandBuffers(
 
 pub fn begOneTimeCommand(
     device: c.VkDevice,
-    vkCommandPool: c.VkCommandPool,
+    command_pool: c.VkCommandPool,
 ) !c.VkCommandBuffer {
     var vkCommandBuffer: c.VkCommandBuffer = undefined;
     try handleError(c.vkAllocateCommandBuffers(device, &c.VkCommandBufferAllocateInfo{
         .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = null,
-        .commandPool = vkCommandPool,
+        .commandPool = command_pool,
         .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     }, &vkCommandBuffer));
@@ -1876,13 +2190,13 @@ pub fn begOneTimeCommand(
 
 pub fn endOneTimeCommand(
     device: c.VkDevice,
-    vkGraphicsQueue: c.VkQueue,
+    graphics_queue: c.VkQueue,
     vkCommandBuffer: c.VkCommandBuffer,
-    vkCommandPool: c.VkCommandPool,
+    command_pool: c.VkCommandPool,
 ) !void {
     try handleError(c.vkEndCommandBuffer(vkCommandBuffer));
 
-    try handleError(c.vkQueueSubmit(vkGraphicsQueue, 1, &c.VkSubmitInfo{
+    try handleError(c.vkQueueSubmit(graphics_queue, 1, &c.VkSubmitInfo{
         .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .pNext = null,
         .waitSemaphoreCount = 0,
@@ -1894,20 +2208,39 @@ pub fn endOneTimeCommand(
         .pSignalSemaphores = null,
     }, null));
 
-    try handleError(c.vkQueueWaitIdle(vkGraphicsQueue));
+    try handleError(c.vkQueueWaitIdle(graphics_queue));
 
-    c.vkFreeCommandBuffers(device, vkCommandPool, 1, &vkCommandBuffer);
+    c.vkFreeCommandBuffers(device, command_pool, 1, &vkCommandBuffer);
+}
+
+pub fn resetCommandBuffer(
+    cmd: c.VkCommandBuffer,
+) !void {
+    try handleError(c.vkResetCommandBuffer(cmd, 0));
+}
+
+pub fn beginCommandBuffer(
+    cmd: c.VkCommandBuffer,
+) !void {
+    try handleError(
+        c.vkBeginCommandBuffer(cmd, &c.VkCommandBufferBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        }),
+    );
 }
 
 pub fn bufferCopy(
     device: c.VkDevice,
-    vkCommandPool: c.VkCommandPool,
-    vkGraphicsQueue: c.VkQueue,
+    command_pool: c.VkCommandPool,
+    graphics_queue: c.VkQueue,
     srcBuffer: c.VkBuffer,
     dstBuffer: c.VkBuffer,
     deviceSize: c.VkDeviceSize,
 ) !void {
-    const vkCommandBuffer: c.VkCommandBuffer = try begOneTimeCommand(device, vkCommandPool);
+    const vkCommandBuffer: c.VkCommandBuffer = try begOneTimeCommand(device, command_pool);
 
     {
         c.vkCmdCopyBuffer(vkCommandBuffer, srcBuffer, dstBuffer, 1, &c.VkBufferCopy{
@@ -1917,7 +2250,7 @@ pub fn bufferCopy(
         });
     }
 
-    try endOneTimeCommand(device, vkGraphicsQueue, vkCommandBuffer, vkCommandPool);
+    try endOneTimeCommand(device, graphics_queue, vkCommandBuffer, command_pool);
 }
 
 fn findMemoryType(
@@ -2014,20 +2347,20 @@ pub fn initVertexBufferSet(
     device: c.VkDevice,
     physical_device: c.VkPhysicalDevice,
     max_vertices: usize,
-    bufferCount: usize,
+    buffer_count: usize,
 ) !VertexBufferSet {
     std.log.info("Trying to init dynamic vertex buffers...", .{});
     errdefer std.log.info("Trying to init dynamic vertex buffers failed", .{});
 
     var vertex_buffer_set: VertexBufferSet = undefined;
     vertex_buffer_set.max_vertices = max_vertices;
-    vertex_buffer_set.vkBuffers = try allocator.alloc(c.VkBuffer, bufferCount);
-    vertex_buffer_set.vkBuffersMemory = try allocator.alloc(c.VkDeviceMemory, bufferCount);
-    vertex_buffer_set.vkBuffersMapped = try allocator.alloc(*anyopaque, bufferCount);
+    vertex_buffer_set.vkBuffers = try allocator.alloc(c.VkBuffer, buffer_count);
+    vertex_buffer_set.vkBuffersMemory = try allocator.alloc(c.VkDeviceMemory, buffer_count);
+    vertex_buffer_set.vkBuffersMapped = try allocator.alloc(*anyopaque, buffer_count);
 
     const buffer_size = @sizeOf(T) * max_vertices;
 
-    for (0..bufferCount) |i| {
+    for (0..buffer_count) |i| {
         try initBuffer(
             device,
             physical_device,
@@ -2078,17 +2411,17 @@ pub fn initUniformBufferSet(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
     physical_device: c.VkPhysicalDevice,
-    bufferCount: usize,
+    buffer_count: usize,
 ) !UniformBufferSet {
     std.log.info("Trying to init uniform buffers...", .{});
     errdefer std.log.info("Trying to init uniform buffers failed", .{});
 
     var uniform_buffer_set: UniformBufferSet = undefined;
-    uniform_buffer_set.vkUniformBuffers = try allocator.alloc(c.VkBuffer, bufferCount);
-    uniform_buffer_set.vkUniformBuffersMemory = try allocator.alloc(c.VkDeviceMemory, bufferCount);
-    uniform_buffer_set.vkUniformBuffersMapped = try allocator.alloc(*anyopaque, bufferCount);
+    uniform_buffer_set.vkUniformBuffers = try allocator.alloc(c.VkBuffer, buffer_count);
+    uniform_buffer_set.vkUniformBuffersMemory = try allocator.alloc(c.VkDeviceMemory, buffer_count);
+    uniform_buffer_set.vkUniformBuffersMapped = try allocator.alloc(*anyopaque, buffer_count);
 
-    for (0..bufferCount) |i| {
+    for (0..buffer_count) |i| {
         try initBuffer(
             device,
             physical_device,
@@ -2130,7 +2463,7 @@ pub fn deinitUniformBufferSet(
 
 // =Semaphores=========================================================================================================
 pub fn initVkSemaphore(device: c.VkDevice) !c.VkSemaphore {
-    var vkSemaphore: c.VkSemaphore = undefined;
+    var semaphore: c.VkSemaphore = undefined;
 
     std.log.info("Trying to init semaphore...", .{});
     errdefer std.log.info("Trying to init semaphore failed", .{});
@@ -2143,20 +2476,20 @@ pub fn initVkSemaphore(device: c.VkDevice) !c.VkSemaphore {
             .flags = 0,
         },
         null,
-        &vkSemaphore,
+        &semaphore,
     ));
 
     defer std.log.info("Trying to init semaphore OK", .{});
-    return vkSemaphore;
+    return semaphore;
 }
 
 pub fn deinitVkSemaphore(
     device: c.VkDevice,
-    vkSemaphore: c.VkSemaphore,
+    semaphore: c.VkSemaphore,
 ) void {
     c.vkDestroySemaphore(
         device,
-        vkSemaphore,
+        semaphore,
         null,
     );
 
@@ -2168,27 +2501,27 @@ pub fn initVkSemaphores(
     device: c.VkDevice,
     count: usize,
 ) ![]c.VkSemaphore {
-    var vkSemaphores: []c.VkSemaphore = undefined;
+    var semaphores: []c.VkSemaphore = undefined;
 
     std.log.info("Trying to init {} semaphores...", .{count});
     errdefer std.log.info("Trying to init {} semaphores failed", .{count});
 
-    vkSemaphores = try allocator.alloc(c.VkSemaphore, count);
-    for (vkSemaphores) |*vkSemaphore| {
-        vkSemaphore.* = try initVkSemaphore(device);
+    semaphores = try allocator.alloc(c.VkSemaphore, count);
+    for (semaphores) |*semaphore| {
+        semaphore.* = try initVkSemaphore(device);
     }
 
     defer std.log.info("Trying to init {} semaphores OK", .{count});
-    return vkSemaphores;
+    return semaphores;
 }
 
-pub fn deinitVkSemaphores(allocator: std.mem.Allocator, device: c.VkDevice, vkSemaphores: []c.VkSemaphore) void {
-    for (vkSemaphores) |vkSemaphore| {
-        deinitVkSemaphore(device, vkSemaphore);
+pub fn deinitVkSemaphores(allocator: std.mem.Allocator, device: c.VkDevice, semaphores: []c.VkSemaphore) void {
+    for (semaphores) |semaphore| {
+        deinitVkSemaphore(device, semaphore);
     }
-    allocator.free(vkSemaphores);
+    allocator.free(semaphores);
 
-    defer std.log.info("Deinit {} semaphores OK", .{vkSemaphores.len});
+    defer std.log.info("Deinit {} semaphores OK", .{semaphores.len});
 }
 
 // =Fences=============================================================================================================
@@ -2299,9 +2632,11 @@ pub fn deinitVkDescriptorPool(
 pub fn initVkDescriptorSets(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
-    vkDescriptorSetLayout: c.VkDescriptorSetLayout,
+    descriptor_set_layout: c.VkDescriptorSetLayout,
     vkDescriptorPool: c.VkDescriptorPool,
     vkUniformBuffers: []c.VkBuffer,
+    font_texture_view: c.VkImageView,
+    font_sampler: c.VkSampler,
 ) ![]c.VkDescriptorSet {
     var descriptor_sets: []c.VkDescriptorSet = undefined;
 
@@ -2311,7 +2646,7 @@ pub fn initVkDescriptorSets(
     const layouts = try allocator.alloc(c.VkDescriptorSetLayout, vkUniformBuffers.len);
     defer allocator.free(layouts);
     for (layouts) |*layout| {
-        layout.* = vkDescriptorSetLayout;
+        layout.* = descriptor_set_layout;
     }
 
     descriptor_sets = try allocator.alloc(c.VkDescriptorSet, vkUniformBuffers.len);
@@ -2326,7 +2661,7 @@ pub fn initVkDescriptorSets(
     for (0..@intCast(vkUniformBuffers.len)) |i| {
         c.vkUpdateDescriptorSets(
             device,
-            1,
+            2,
             &[_]c.VkWriteDescriptorSet{
                 c.VkWriteDescriptorSet{
                     .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -2342,6 +2677,22 @@ pub fn initVkDescriptorSets(
                         .offset = 0,
                         .range = @sizeOf(Uniform),
                     },
+                    .pTexelBufferView = null,
+                },
+                c.VkWriteDescriptorSet{
+                    .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = descriptor_sets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &c.VkDescriptorImageInfo{
+                        .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .imageView = font_texture_view,
+                        .sampler = font_sampler,
+                    },
+                    .pBufferInfo = null,
                     .pTexelBufferView = null,
                 },
             },
@@ -2361,4 +2712,326 @@ pub fn deinitVkDescriptorSets(
     allocator.free(descriptor_sets);
 
     defer std.log.info("Deinit descriptor sets OK", .{});
+}
+
+// =TextureSampler=====================================================================================================
+
+pub fn initTextureSampler(
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
+) !c.VkSampler {
+    var vkTextureSampler: c.VkSampler = undefined;
+
+    std.log.info("Trying to init texture sampler...", .{});
+    errdefer std.log.info("Trying to init texture sampler failed", .{});
+
+    var properties: c.VkPhysicalDeviceProperties = undefined;
+    c.vkGetPhysicalDeviceProperties(physical_device, &properties);
+
+    try handleError(c.vkCreateSampler(device, &c.VkSamplerCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .magFilter = c.VK_FILTER_LINEAR,
+        .minFilter = c.VK_FILTER_LINEAR,
+        .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .mipLodBias = 0.0,
+        .anisotropyEnable = c.VK_FALSE,
+        .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+        .compareEnable = c.VK_FALSE,
+        .compareOp = c.VK_COMPARE_OP_ALWAYS,
+        .minLod = 0.0,
+        .maxLod = 0.0,
+        .borderColor = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = c.VK_FALSE,
+    }, null, &vkTextureSampler));
+
+    std.log.info("Trying to init texture sampler OK", .{});
+    return vkTextureSampler;
+}
+
+pub fn deinitTextureSampler(
+    device: c.VkDevice,
+    vkTextureSampler: c.VkSampler,
+) void {
+    std.log.info("Trying to free vulkan buffer...", .{});
+
+    c.vkDestroySampler(device, vkTextureSampler, null);
+
+    defer std.log.info("Trying to free vulkan buffer OK", .{});
+}
+
+// =TextureImage=======================================================================================================
+
+pub const Image = struct {
+    image: c.VkImage,
+    image_memory: c.VkDeviceMemory,
+};
+
+pub fn initImage(
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
+    textureH: u32,
+    textureW: u32,
+    vkFormat: c.VkFormat,
+    imageTiling: c.VkImageTiling,
+    imageUsageFlags: c.VkImageUsageFlags,
+    vkMemoryPropertyFlags: c.VkMemoryPropertyFlags,
+) !Image {
+    var image: Image = undefined;
+
+    std.log.info("Trying to init image...", .{});
+    errdefer std.log.info("Trying to init image failed", .{});
+
+    try handleError(c.vkCreateImage(
+        device,
+        &c.VkImageCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = c.VK_IMAGE_TYPE_2D,
+            .format = vkFormat,
+            .extent = c.VkExtent3D{ .width = textureW, .height = textureH, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = imageTiling,
+            .usage = imageUsageFlags,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        },
+        null,
+        &image.image,
+    ));
+
+    var memRequirements: c.VkMemoryRequirements = undefined;
+    c.vkGetImageMemoryRequirements(device, image.image, &memRequirements);
+
+    try handleError(c.vkAllocateMemory(device, &c.VkMemoryAllocateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = null,
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = try findMemoryType(
+            physical_device,
+            memRequirements.memoryTypeBits,
+            vkMemoryPropertyFlags,
+        ),
+    }, null, &image.image_memory));
+
+    try handleError(c.vkBindImageMemory(device, image.image, image.image_memory, 0));
+
+    std.log.info("Trying to init image OK", .{});
+    return image;
+}
+
+pub fn transitionImageLayout(
+    device: c.VkDevice,
+    command_pool: c.VkCommandPool,
+    graphics_queue: c.VkQueue,
+    image: c.VkImage,
+    format: c.VkFormat,
+    oldLayout: c.VkImageLayout,
+    newLayout: c.VkImageLayout,
+) !void {
+    const commandBuffer = try begOneTimeCommand(device, command_pool);
+
+    var srcStage: c.VkPipelineStageFlags = undefined;
+    var dstStage: c.VkPipelineStageFlags = undefined;
+    var srcAccessMask: c.VkAccessFlags = undefined;
+    var dstAccessMask: c.VkAccessFlags = undefined;
+
+    // dunno what this does
+    if (oldLayout == c.VK_IMAGE_LAYOUT_UNDEFINED and //
+        newLayout == c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+    {
+        srcAccessMask = 0;
+        dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        srcStage = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and //
+        newLayout == c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+    {
+        srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+        dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+        srcStage = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        return error.VkError;
+    }
+
+    c.vkCmdPipelineBarrier(
+        commandBuffer,
+        srcStage,
+        dstStage,
+        0,
+        0,
+        null,
+        0,
+        null,
+        1,
+        &c.VkImageMemoryBarrier{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = srcAccessMask,
+            .dstAccessMask = dstAccessMask,
+            .oldLayout = oldLayout,
+            .newLayout = newLayout,
+            .srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = c.VkImageSubresourceRange{
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        },
+    );
+
+    _ = format;
+
+    try endOneTimeCommand(device, graphics_queue, commandBuffer, command_pool);
+}
+
+pub fn copyBufferToImage(
+    device: c.VkDevice,
+    command_pool: c.VkCommandPool,
+    graphics_queue: c.VkQueue,
+    imageW: u32,
+    imageH: u32,
+    vkBuffer: c.VkBuffer,
+    image: c.VkImage,
+) !void {
+    const commandBuffer = try begOneTimeCommand(device, command_pool);
+
+    c.vkCmdCopyBufferToImage(
+        commandBuffer,
+        vkBuffer,
+        image,
+        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &c.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = c.VkImageSubresourceLayers{
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = c.VkOffset3D{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            },
+            .imageExtent = c.VkExtent3D{
+                .width = imageW,
+                .height = imageH,
+                .depth = 1,
+            },
+        },
+    );
+
+    try endOneTimeCommand(device, graphics_queue, commandBuffer, command_pool);
+}
+
+pub fn initTextureImage(
+    device: c.VkDevice,
+    physical_device: c.VkPhysicalDevice,
+    command_pool: c.VkCommandPool,
+    graphics_queue: c.VkQueue,
+    bytes: []const u8,
+) !Image {
+    const io = try handleError(c.SDL_IOFromConstMem(bytes.ptr, bytes.len));
+    const surf = try handleError(c.IMG_Load_IO(io, true));
+    const rgba = try handleError(c.SDL_ConvertSurface(surf, c.SDL_PIXELFORMAT_RGBA32));
+    defer c.SDL_DestroySurface(surf);
+
+    const texW: u32 = @intCast(rgba.*.w);
+    const texH: u32 = @intCast(rgba.*.h);
+    const imageSize: usize = @as(usize, texW) * @as(usize, texH) * 4;
+
+    var vkStagingBuffer: c.VkBuffer = undefined;
+    defer c.vkDestroyBuffer(device, vkStagingBuffer, null);
+    var vkStagingBufferMemory: c.VkDeviceMemory = undefined;
+    defer c.vkFreeMemory(device, vkStagingBufferMemory, null);
+    try initBuffer(
+        device,
+        physical_device,
+        imageSize,
+        c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &vkStagingBuffer,
+        &vkStagingBufferMemory,
+    );
+
+    var data: *anyopaque = undefined;
+    try handleError(c.vkMapMemory(device, vkStagingBufferMemory, 0, imageSize, 0, @ptrCast(&data)));
+    memcpy(data, rgba.*.pixels, imageSize);
+    c.vkUnmapMemory(device, vkStagingBufferMemory);
+
+    const image = try initImage(
+        device,
+        physical_device,
+        texW,
+        texH,
+        c.VK_FORMAT_R8G8B8A8_UNORM,
+        c.VK_IMAGE_TILING_OPTIMAL,
+        c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT,
+        c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    );
+
+    try transitionImageLayout(
+        device,
+        command_pool,
+        graphics_queue,
+        image.image,
+        c.VK_FORMAT_R8G8B8A8_UNORM,
+        c.VK_IMAGE_LAYOUT_UNDEFINED,
+        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    );
+
+    try copyBufferToImage(
+        device,
+        command_pool,
+        graphics_queue,
+        texW,
+        texH,
+        vkStagingBuffer,
+        image.image,
+    );
+
+    try transitionImageLayout(
+        device,
+        command_pool,
+        graphics_queue,
+        image.image,
+        c.VK_FORMAT_R8G8B8A8_UNORM,
+        c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    );
+
+    return image;
+}
+
+pub fn deinitTextureImage(
+    device: c.VkDevice,
+    image: c.VkImage,
+    image_memory: c.VkDeviceMemory,
+) void {
+    std.log.info("Trying to free vulkan texture image...", .{});
+
+    c.vkDestroyImage(device, image, null);
+    c.vkFreeMemory(device, image_memory, null);
+
+    defer std.log.info("Trying to free vulkan texture image OK", .{});
 }

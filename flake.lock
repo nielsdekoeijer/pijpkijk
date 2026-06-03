@@ -16,13 +16,31 @@
         "type": "github"
       }
     },
+    "msdf-atlas-gen": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778948996,
+        "narHash": "sha256-+iMf83v0FXB7rJOIOxBpokWa8njOYQjFTlQXNHiojDU=",
+        "ref": "refs/heads/master",
+        "rev": "6148900d59423059bafde2f51a0cb303184404bd",
+        "revCount": 57,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/Chlumsky/msdf-atlas-gen"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/Chlumsky/msdf-atlas-gen"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1778443072,
-        "narHash": "sha256-zi7/fsqM/kFdNuED//4WOCUtezGtKKqRNORjMvfwjnA=",
+        "lastModified": 1780243769,
+        "narHash": "sha256-x5UQuRsH3MqI0U9afaXSNqzTPSeZlRLvFAav2Ux1pNw=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "da5ad661ba4e5ef59ba743f0d112cbc30e474f32",
+        "rev": "331800de5053fcebacf6813adb5db9c9dca22a0c",
         "type": "github"
       },
       "original": {
@@ -50,6 +68,7 @@
     },
     "root": {
       "inputs": {
+        "msdf-atlas-gen": "msdf-atlas-gen",
         "nixpkgs": "nixpkgs",
         "utils": "utils",
         "zig-flake": "zig-flake",
@@ -112,11 +131,11 @@
         "systems": "systems_2"
       },
       "locked": {
-        "lastModified": 1778547740,
-        "narHash": "sha256-k4EuXt+XmTyA1Cbykly3vDpkaumSB3JHDjuUFrV92Rc=",
+        "lastModified": 1780323358,
+        "narHash": "sha256-iK4P0ZYOb3D4S8DqvWUivGfjoMjZnAQEc5Kr5crIDBc=",
         "owner": "mitchellh",
         "repo": "zig-overlay",
-        "rev": "0cebd9b9215fa121233f9a0799d2acfbbfaee700",
+        "rev": "22d713bdaec64681e56f5b69289789e3dd5430e0",
         "type": "github"
       },
       "original": {

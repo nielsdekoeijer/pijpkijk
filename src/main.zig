@@ -60,9 +60,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator: std.mem.Allocator = init.gpa;
 
-    _ = io;
-
-    var app = try pijpkijk.App.init(allocator);
+    var app = try pijpkijk.App.init(allocator, io);
     defer app.deinit();
     try app.run();
 }
