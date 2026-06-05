@@ -13,7 +13,6 @@ fn ValidReturnType(comptime ErrorType: type) type {
     }
 }
 
-/// SDL error Helper. Maps booleans, nullptrs, etc. to Zig error types
 pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
     switch (@TypeOf(err)) {
         inline bool => if (err == false) return error.CError,

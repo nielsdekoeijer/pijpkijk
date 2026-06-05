@@ -4,70 +4,10 @@ const QuadVertex = @import("types.zig").QuadVertex;
 const BezierVertex = @import("types.zig").BezierVertex;
 const TextVertex = @import("types.zig").TextVertex;
 const Uniform = @import("types.zig").Uniform;
+const WaylandHandle = @import("wayland.zig").WaylandHandle;
 const handleError = @import("error.zig").handleError;
 
-// ====================================================================================================================
-//  [1. PLATFORM & CORE]
-//    SDL3 Window
-//        |
-//    VkInstance ---------------------------> VkSurfaceKHR
-//    (Vulkan API Context)                    (Drawable OS Window Area)
-//        |                                         ^
-//        v                                         |
-//    VkPhysicalDevice (GPU Selection) -------------+ (Checks Queues, Formats, Present Modes)
-//        |
-//        v
-//    VkDevice (Logical Connection)
-//        |--> Graphics Queue (Submits Draw/Copy Commands)
-//        +--> Present Queue  (Submits to Monitor)
-//
-//
-//  [2. SWAPCHAIN & RENDER TARGETS]
-//    VkSwapchainKHR (The queue of images for the monitor)
-//        |
-//        v
-//    []VkImage (Raw pixel memory) ---> []VkImageView (Format/Swizzle wrapper)
-//                                             |
-//    VkRenderPass (Draw/Load/Store Rules)     |
-//        |                                    |
-//        +------------------------------------+
-//        |
-//        v
-//    []VkFramebuffer (The actual canvas targets bound during drawing)
-//
-//
-//  [3. THE GRAPHICS PIPELINE (State Machine)]
-//    VkShaderModule (Vert/Frag) ---+
-//                                  |
-//    VkDescriptorSetLayout --------+--> VkPipelineLayout (Push Constants & Descriptor Signatures)
-//                                  |          |
-//                                  |          v
-//    VkRenderPass -----------------+--> VkPipeline (The locked-in hardware state machine)
-//
-//
-//  [4. RESOURCES & DATA (Memory)]
-//    VkDescriptorPool ---> []VkDescriptorSet (Holds Pointers to Uniforms/Textures for the Shader)
-//                                 |
-//         +-----------------------+-----------------------+
-//         |                                               |
-//         v                                               v
-//    VkBuffer (Uniform/Vertex)                       VkImage (Texture) + VkSampler
-//         |                                               |
-//    VkDeviceMemory (Mapped/Unmapped)                VkDeviceMemory (Device Local)
-//
-//
-//  [5. EXECUTION & SYNCHRONIZATION]
-//    VkCommandPool ---> []VkCommandBuffer (Where you record your actual frame loop)
-//                                 |
-//                                 +--> vkCmdBeginRenderPass    (Uses VkFramebuffer)
-//                                 +--> vkCmdBindPipeline       (Uses VkPipeline)
-//                                 +--> vkCmdBindDescriptorSets (Uses VkDescriptorSet)
-//                                 +--> vkCmdDraw               (Uses VkBuffer/Vertex data)
-//
-//    VkFence     (CPU <-> GPU: Stops CPU from overwriting buffers currently in flight)
-//    VkSemaphore (GPU <-> GPU: Stops Drawing before Image is ready; Stops Present before Draw is done)
-//
-// ====================================================================================================================
+// =Generic============================================================================================================
 
 /// Memcpy for generic non-slices, defers to zigs built in memcpy by casting pointers to slices. Likely slightly dodgy.
 pub fn memcpy(dst: anytype, src: anytype, byteCount: usize) void {
@@ -75,60 +15,6 @@ pub fn memcpy(dst: anytype, src: anytype, byteCount: usize) void {
         @as([*]u8, @ptrCast(dst))[0..byteCount],
         @as([*]u8, @ptrCast(@constCast(src)))[0..byteCount],
     );
-}
-
-// =SDL3===============================================================================================================
-
-/// Helper function to initialize SDL3 with the given flags
-pub fn sdlInit(options: struct {
-    flags: c.SDL_InitFlags = c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO,
-}) !void {
-    std.log.info("Trying to init SDL3...", .{});
-    errdefer std.log.err("Trying to init SDL3 failed", .{});
-
-    try handleError(
-        c.SDL_Init(options.flags),
-    );
-
-    defer std.log.info("Trying to init SDL3 OK", .{});
-}
-
-/// Helper function to deinitialize SDL3
-pub fn sdlQuit() void {
-    c.SDL_Quit();
-
-    defer std.log.info("Deinit SDL3 OK", .{});
-}
-
-/// Helper function to initialize SDL3 window given some options
-pub fn sdlInitWindow(options: struct {
-    cname: [*:0]const u8 = "window",
-    w: usize,
-    h: usize,
-    flags: c.SDL_WindowFlags = c.SDL_WINDOW_VULKAN | c.SDL_WINDOW_RESIZABLE,
-}) !*c.SDL_Window {
-    std.log.info("Trying to init SDL3 window...", .{});
-    errdefer std.log.err("Trying to SDL3 window failed", .{});
-
-    const window = try handleError(
-        c.SDL_CreateWindow(
-            options.cname,
-            @intCast(options.w),
-            @intCast(options.h),
-            options.flags,
-        ),
-    );
-
-    defer std.log.info("Trying to init SDL3 window OK", .{});
-
-    return window;
-}
-
-/// Helper function to destroy an SDL3 window
-pub fn sdlDestroyWindow(window: *c.SDL_Window) void {
-    c.SDL_DestroyWindow(window);
-
-    defer std.log.info("Deinit SDL3 window OK", .{});
 }
 
 // =VkInstance=========================================================================================================
@@ -148,30 +34,6 @@ pub export fn vkDebugCallback(
 
     std.log.debug("\x1b[1m[validation layer]\x1b[0m {s}", .{std.mem.span(callback_data.*.pMessage)});
     return @as(c.VkBool32, 0);
-}
-
-/// Creates an arraylist of the vulkan extensions requested by SDL3
-fn getSDLRequestedVkInstanceExtensions(
-    allocator: std.mem.Allocator,
-) !std.ArrayList([*:0]const u8) {
-    std.log.debug("Trying to enumerate SDL3 requested vulkan extensions...", .{});
-    errdefer std.log.err("Trying to enumerate SDL3 requested vulkan extensions failed", .{});
-
-    var count: u32 = 0;
-    const extensions_base = c.SDL_Vulkan_GetInstanceExtensions(&count);
-    std.log.debug("SDL requests '{}' extensions in total", .{count});
-
-    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
-    errdefer extensions.deinit(allocator);
-
-    for (0..count) |i| {
-        std.log.debug("SDL requests extension '{s}'", .{extensions_base[i]});
-        extensions.appendAssumeCapacity(extensions_base[i]);
-    }
-
-    defer std.log.debug("Trying to enumerate SDL3 requested vulkan extensions OK", .{});
-
-    return extensions;
 }
 
 /// Creates an arraylist of all supported vulkan extensions
@@ -317,10 +179,19 @@ pub fn initVkInstance(
     errdefer std.log.err("Trying to init vulkan instance failed", .{});
 
     // create our list of requested instance extensions, which specifies non-standard features we wish to use
-    var extensions = try getSDLRequestedVkInstanceExtensions(allocator);
+    var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer extensions.deinit(allocator);
+
+    try extensions.append(allocator, c.VK_KHR_SURFACE_EXTENSION_NAME);
+    try extensions.append(allocator, c.VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME);
+    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
+
+    if (@import("builtin").mode == .Debug) {
+        try extensions.append(allocator, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+
     try checkRequestedVkInstanceExtensionsSupported(allocator, extensions.items);
 
     // create our list of requested instance layers, which can provide us debug information
@@ -408,29 +279,38 @@ pub fn deinitVkInstance(
 // =VkSurface==========================================================================================================
 // The surface is the thing we draw onto.
 
-/// Initialize vulkan surface from an SDL3 window
-pub fn initVkSurface(
-    window: *c.SDL_Window,
+/// Initialize vulkan surface from a wayland instance
+pub fn initVkSurfaceWayland(
     instance: c.VkInstance,
+    wayland_display: *c.struct_wl_display,
+    wayland_surface: *c.struct_wl_surface,
 ) !c.VkSurfaceKHR {
     var surface: c.VkSurfaceKHR = undefined;
 
     std.log.info("Trying to init vulkan surface...", .{});
     errdefer std.log.err("Trying to init vulkan surface failed", .{});
 
-    try handleError(c.SDL_Vulkan_CreateSurface(window, instance, null, &surface));
-    errdefer deinitVkSurface(surface);
+    const create_info = c.VkWaylandSurfaceCreateInfoKHR{
+        .sType = c.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+        .pNext = null,
+        .flags = 0,
+        .display = wayland_display,
+        .surface = wayland_surface,
+    };
+
+    try handleError(c.vkCreateWaylandSurfaceKHR(instance, &create_info, null, &surface));
 
     defer std.log.info("Trying to init vulkan surface OK", .{});
     return surface;
 }
 
-/// Deinitialize vulkan surface from SDL3
+/// Deinitialize vulkan surface from
 pub fn deinitVkSurface(
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
 ) void {
-    c.SDL_Vulkan_DestroySurface(instance, surface, null);
+    _ = instance;
+    _ = surface;
 
     defer std.log.info("Deinit vulkan surface OK", .{});
 }
@@ -601,46 +481,26 @@ pub fn initVkPhysicalDevice(
 // Describes some properties of our surface, such as the min, max and current size. Used in swapchain creation and
 // window extend calculation.
 
-/// Gets a vulkan extent containing the surface dimensions from an SDL window
-pub fn getVkExtentFromSDLWindow(
-    window: *c.SDL_Window,
+pub fn getVkExtentFromWayland(
+    handle: *WaylandHandle,
     capabilities: c.VkSurfaceCapabilitiesKHR,
-) !c.VkExtent2D {
+) c.VkExtent2D {
     std.log.debug("Trying to get extent...", .{});
     errdefer std.log.err("Trying to get extent failed", .{});
 
-    if (capabilities.currentExtent.width != std.math.maxInt(u32) or //
-        capabilities.currentExtent.height != std.math.maxInt(u32))
-    {
-        return capabilities.currentExtent;
-    }
-
-    var w: c_int = 0;
-    var h: c_int = 0;
-    try handleError(c.SDL_GetWindowSizeInPixels(window, &w, &h));
-
-    const w32: u32 = @intCast(if (w < 0) 0 else w);
-    const h32: u32 = @intCast(if (h < 0) 0 else h);
-
-    // clamp to boundaries defined by the swapchain
-    const extent = c.VkExtent2D{
+    defer std.log.debug("Trying to get extent OK", .{});
+    return c.VkExtent2D{
         .width = std.math.clamp(
-            w32,
+            handle.state.width,
             capabilities.minImageExtent.width,
             capabilities.maxImageExtent.width,
         ),
         .height = std.math.clamp(
-            h32,
+            handle.state.height,
             capabilities.minImageExtent.height,
             capabilities.maxImageExtent.height,
         ),
     };
-
-    std.log.debug("Created extent of size ({} x {})", .{ extent.width, extent.height });
-
-    defer std.log.debug("Trying to get extent OK", .{});
-
-    return extent;
 }
 
 /// Gets the surface capabilities of our physical device given the surface
@@ -2951,13 +2811,29 @@ pub fn initTextureImage(
     graphics_queue: c.VkQueue,
     bytes: []const u8,
 ) !Image {
-    const io = try handleError(c.SDL_IOFromConstMem(bytes.ptr, bytes.len));
-    const surf = try handleError(c.IMG_Load_IO(io, true));
-    const rgba = try handleError(c.SDL_ConvertSurface(surf, c.SDL_PIXELFORMAT_RGBA32));
-    defer c.SDL_DestroySurface(surf);
+    var width: c_int = 0;
+    var height: c_int = 0;
+    var channels: c_int = 0;
 
-    const texW: u32 = @intCast(rgba.*.w);
-    const texH: u32 = @intCast(rgba.*.h);
+    // stbi_load_from_memory expects (buffer, len, &w, &h, &channels, desired_channels)
+    // We pass 4 to force STBI_rgb_alpha (RGBA 32-bit)
+    const pixels = c.stbi_load_from_memory(
+        bytes.ptr,
+        @intCast(bytes.len),
+        &width,
+        &height,
+        &channels,
+        4,
+    );
+
+    if (pixels == null) {
+        std.log.err("Failed to load image via stb_image", .{});
+        return error.ImageLoadFailed; // Be sure to add this to your error.zig or handle accordingly
+    }
+    defer c.stbi_image_free(pixels);
+
+    const texW: u32 = @intCast(width);
+    const texH: u32 = @intCast(height);
     const imageSize: usize = @as(usize, texW) * @as(usize, texH) * 4;
 
     var vkStagingBuffer: c.VkBuffer = undefined;
@@ -2976,7 +2852,8 @@ pub fn initTextureImage(
 
     var data: *anyopaque = undefined;
     try handleError(c.vkMapMemory(device, vkStagingBufferMemory, 0, imageSize, 0, @ptrCast(&data)));
-    memcpy(data, rgba.*.pixels, imageSize);
+    const pixel_ptr: [*]const u8 = @ptrCast(pixels);
+    memcpy(data, pixel_ptr, imageSize);
     c.vkUnmapMemory(device, vkStagingBufferMemory);
 
     const image = try initImage(

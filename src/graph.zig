@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig").pw;
+const c = @import("c.zig").c;
 const types = @import("types.zig");
 
 // Internal representations for tracking async objects

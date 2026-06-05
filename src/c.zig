@@ -1,19 +1,19 @@
-/// Import SDL C-bindings
 pub const c = @cImport({
-    // Import vulkan first
+    // For loading images
+    @cInclude("stb/stb_image.h");
+
+    // Wayland
+    @cInclude("wayland-client.h");
+    @cInclude("wayland-client-protocol.h");
+    @cInclude("xdg-shell-protocol.h");
+    @cInclude("sys/mman.h");
+    @cInclude("unistd.h");
+    @cInclude("xkbcommon/xkbcommon.h");
+
+    // Import vulkan 
+    @cDefine("VK_USE_PLATFORM_WAYLAND_KHR", "1");
     @cInclude("vulkan/vulkan.h");
 
-    @cDefine("SDL_DISABLE_OLD_NAMES", {});
-    @cDefine("SDL_MAIN_HANDLED", {});
-    @cInclude("SDL3/SDL.h");
-    @cInclude("SDL3/SDL_revision.h");
-    @cInclude("SDL3/SDL_main.h");
-    @cInclude("SDL3/SDL_vulkan.h");
-    @cInclude("SDL3_image/SDL_image.h");
-});
-
-/// Seperate now because imports are cooked for some reason
-pub const pw = @cImport({
     // Nasty hack: why is pipewire so fucking awful?
     @cDefine("_Static_assert(...)", {});
     @cInclude("pipewire-0.3/pipewire/pipewire.h");

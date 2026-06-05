@@ -3,13 +3,18 @@ const Io = std.Io;
 const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
 const util = @import("util.zig");
+const wayland = @import("wayland.zig");
 const types = @import("types.zig");
 const graph = @import("graph.zig");
 
 pub const FRAMES_IN_FLIGHT = 3;
 
+pub const UserData = enum(u64) {
+    WAYLAND,
+};
+
 pub const App = struct {
-    window: *c.struct_SDL_Window,
+    wayland_handle: *wayland.WaylandHandle,
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
     allocator: std.mem.Allocator,
@@ -54,6 +59,7 @@ pub const App = struct {
     font_texture_image: util.Image,
     font_texture_view: []c.VkImageView,
     font_sampler: c.VkSampler,
+    ring: std.os.linux.IoUring,
 
     // TEMP
     pw_manager: *graph.PwGraph,
@@ -78,20 +84,37 @@ pub const App = struct {
         self.pw_manager = try graph.PwGraph.init(allocator, io);
         self.frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-        // =InitializeSDL3=============================================================================================
-        try util.sdlInit(.{});
-        errdefer util.sdlQuit();
+        self.ring = try std.os.linux.IoUring.init(32, 0);
+        errdefer self.ring.deinit();
 
-        // =AqcuireWindow==============================================================================================
-        self.window = try util.sdlInitWindow(.{ .cname = name, .w = default_width, .h = default_height });
-        errdefer util.sdlDestroyWindow(self.window);
+        // =InitializeWayland==========================================================================================
+        self.wayland_handle = try allocator.create(wayland.WaylandHandle);
+        try wayland.WaylandHandle.init(self.wayland_handle);
+
+        try self.wayland_handle.start_core();
+        while (!self.wayland_handle.core_ready()) {
+            try self.wayland_handle.flush_blocking();
+        }
+
+        while (!self.wayland_handle.seat_ready()) {
+            try self.wayland_handle.flush_blocking();
+        }
+
+        try self.wayland_handle.start_surface();
+        while (!self.wayland_handle.surface_ready()) {
+            try self.wayland_handle.flush_blocking();
+        }
 
         // =AqcuireVkInstance==========================================================================================
         self.instance = try util.initVkInstance(allocator);
         errdefer util.deinitVkInstance(self.instance);
 
         // =AqcuireVkSurface===========================================================================================
-        self.surface = try util.initVkSurface(self.window, self.instance);
+        self.surface = try util.initVkSurfaceWayland(
+            self.instance,
+            self.wayland_handle.core.display,
+            self.wayland_handle.registry_surface.surface.?,
+        );
         errdefer util.deinitVkSurface(self.instance, self.surface);
 
         // =AqcuireVkPhysicalDevice====================================================================================
@@ -99,7 +122,7 @@ pub const App = struct {
         self.graphics_queue_index = try util.findGraphicsQueueIndex(allocator, self.physical_device);
         self.present_queue_index = try util.findPresentQueueIndex(allocator, self.surface, self.physical_device);
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
+        self.swap_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
         self.surface_format = try util.getPreferredVkSurfaceFormat(allocator, self.physical_device, self.surface);
         self.present_mode = try util.getPreferredVkPresentMode(allocator, self.physical_device, self.surface);
 
@@ -125,7 +148,7 @@ pub const App = struct {
             self.present_mode,
             self.graphics_queue_index,
             self.present_queue_index,
-            null,
+            @ptrCast(c.VK_NULL_HANDLE),
         );
         errdefer util.deinitVkSwapchain(self.device, self.swapchain);
 
@@ -322,330 +345,344 @@ pub const App = struct {
         std.log.info("Running loop...", .{});
         errdefer std.log.info("Running loop exited with failure", .{});
 
-        // State
-        var key_down_x: ?f32 = null;
-        var key_down_y: ?f32 = null;
         var running = true;
         var current_frame: usize = 0;
         var window_resized = false;
-        var e: c.SDL_Event = undefined;
+        var needs_render = true;
+
+        const wl_fd = c.wl_display_get_fd(self.wayland_handle.core.display);
+        _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
+        _ = try self.ring.submit();
 
         // Our main loop of the program
         while (running) {
-            // Handle events
-            while (c.SDL_PollEvent(&e) != false) {
-                switch (e.type) {
-                    c.SDL_EVENT_QUIT, c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => {
-                        running = false;
-                    },
-                    c.SDL_EVENT_WINDOW_RESIZED, c.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
-                        window_resized = true;
-                    },
-                    c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
-                        const world_x = (e.button.x / self.scale) + self.camera_pos[0];
-                        const world_y = (e.button.y / self.scale) + self.camera_pos[1];
+            // Process leftover events from our last loop
+            _ = c.wl_display_dispatch_pending(self.wayland_handle.core.display);
 
-                        std.log.debug("Mouse button down (World): ({d}, {d})", .{ world_x, world_y });
+            var cqes: [16]std.os.linux.io_uring_cqe = undefined;
 
-                        var i = self.nodes.len;
-                        while (i > 0) {
-                            i -= 1;
-                            if (self.nodes[i].contains(world_x, world_y)) {
-                                self.selected_node = i;
-                                break;
+            const wait_nr: u32 = if (needs_render) 0 else 1;
+            const cqe_count = try self.ring.copy_cqes(&cqes, wait_nr);
+
+            for (cqes[0..cqe_count]) |cqe| {
+                const user_data: UserData = @enumFromInt(cqe.user_data);
+                switch (user_data) {
+                    UserData.WAYLAND => {
+                        if (cqe.res >= 0) {
+                            const revents = @as(u32, @bitCast(cqe.res));
+                            
+                            if ((revents & std.posix.POLL.IN) != 0) {
+                                _ = c.wl_display_dispatch(self.wayland_handle.core.display);
+
+                                needs_render = true;
                             }
                         }
 
-                        key_down_x = e.button.x;
-                        key_down_y = e.button.y;
+                        _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
                     },
-                    c.SDL_EVENT_MOUSE_BUTTON_UP => {
-                        const world_x = (e.button.x / self.scale) + self.camera_pos[0];
-                        const world_y = (e.button.y / self.scale) + self.camera_pos[1];
-
-                        std.log.debug("Mouse button lift (World): ({d}, {d})", .{ world_x, world_y });
-
-                        self.selected_node = null;
-                        key_down_x = null;
-                        key_down_y = null;
-                    },
-                    c.SDL_EVENT_MOUSE_MOTION => {
-                        if (key_down_x) |x| {
-                            const dx = e.motion.x - x;
-                            const world_dx = dx / self.scale;
-
-                            if (self.selected_node) |node_index| {
-                                self.nodes[node_index].x += world_dx;
-                            } else {
-                                self.camera_pos[0] -= world_dx;
-                            }
-                            key_down_x = e.motion.x;
-                        }
-
-                        if (key_down_y) |y| {
-                            const dy = e.motion.y - y;
-                            const world_dy = dy / self.scale;
-
-                            if (self.selected_node) |node_index| {
-                                self.nodes[node_index].y += world_dy;
-                            } else {
-                                self.camera_pos[1] -= world_dy;
-                            }
-                            key_down_y = e.motion.y;
-                        }
-                    },
-                    c.SDL_EVENT_KEY_DOWN => {
-                        const move_speed = 100.0;
-                        const zoom_speed = 0.03;
-                        switch (e.key.key) {
-                            c.SDLK_ESCAPE => running = false,
-                            c.SDLK_Q => self.scale -= zoom_speed,
-                            c.SDLK_E => self.scale += zoom_speed,
-                            c.SDLK_W => self.camera_pos[1] -= move_speed * self.scale,
-                            c.SDLK_S => self.camera_pos[1] += move_speed * self.scale,
-                            c.SDLK_A => self.camera_pos[0] -= move_speed * self.scale,
-                            c.SDLK_D => self.camera_pos[0] += move_speed * self.scale,
-                            else => {},
-                        }
-                    },
-                    else => {},
                 }
             }
 
-            // If window resized, we must recreate the swapchain
-            if (window_resized) {
-                window_resized = false;
-                try self.recreateSwapchain();
+            _ = try self.ring.submit();
+            _ = c.wl_display_flush(self.wayland_handle.core.display);
+
+            if (self.wayland_handle.state.should_close) {
+                running = false;
             }
 
-            // Stops CPU from overwriting buffers currently in flight, this garuntee that the GPU has finished working
-            // on `current_frame` before we start overwriting stuff.
-            try handleError(
-                c.vkWaitForFences(
-                    self.device,
-                    1,
-                    &self.in_flight_fences[current_frame],
-                    c.VK_TRUE,
-                    std.math.maxInt(u64),
-                ),
-            );
+            // Handle Mouse Input
+            // if (self.wayland_state.mouse_just_pressed) {
+            //     const world_x = (self.wayland_state.mouse_x / self.scale) + self.camera_pos[0];
+            //     const world_y = (self.wayland_state.mouse_y / self.scale) + self.camera_pos[1];
+            //
+            //     var i = self.nodes.len;
+            //     while (i > 0) {
+            //         i -= 1;
+            //         if (self.nodes[i].contains(world_x, world_y)) {
+            //             self.selected_node = i;
+            //             break;
+            //         }
+            //     }
+            //     self.wayland_state.mouse_just_pressed = false; // consume
+            // }
+            //
+            // if (self.wayland_state.mouse_just_released) {
+            //     self.selected_node = null;
+            //     self.wayland_state.mouse_just_released = false; // consume
+            // }
+            //
+            // if (self.wayland_state.mouse_button_down) {
+            //     const world_dx = self.wayland_state.mouse_x_delta / self.scale;
+            //     const world_dy = self.wayland_state.mouse_y_delta / self.scale;
+            //
+            //     if (self.selected_node) |node_index| {
+            //         self.nodes[node_index].x += world_dx;
+            //         self.nodes[node_index].y += world_dy;
+            //     } else {
+            //         self.camera_pos[0] -= world_dx;
+            //         self.camera_pos[1] -= world_dy;
+            //     }
+            // }
+            //
+            // // Consume deltas so the camera/nodes stop moving when the mouse stops
+            // self.wayland_state.mouse_x_delta = 0;
+            // self.wayland_state.mouse_y_delta = 0;
+            //
+            // // Handle Keyboard Input (Applying small deltas for continuous polling)
+            // const move_speed = 3.0; // Adjusted for per-frame polling
+            // const zoom_speed = 0.0003;
+            //
+            // if (self.wayland_state.key_w) self.camera_pos[1] -= move_speed * self.scale;
+            // if (self.wayland_state.key_s) self.camera_pos[1] += move_speed * self.scale;
+            // if (self.wayland_state.key_a) self.camera_pos[0] -= move_speed * self.scale;
+            // if (self.wayland_state.key_d) self.camera_pos[0] += move_speed * self.scale;
+            //
+            // // Note: You might want a cooldown/debounce on Q/E so it doesn't zoom infinitely fast
+            // if (self.wayland_state.key_q) self.scale -= zoom_speed;
+            // if (self.wayland_state.key_e) self.scale += zoom_speed;
 
-            // Retrieve the image of the next swapchain image
-            var image_index: u32 = undefined;
-            {
-                const acquire_result = c.vkAcquireNextImageKHR(
-                    self.device,
-                    self.swapchain,
-                    std.math.maxInt(u64),
-                    // Is when the image is safe to draw to, can be either a semaphore or a fence. Note we return
-                    // BEFORE the semaphore is signaled! So it must be checked.
-                    self.image_availible_semaphore[current_frame],
-                    // This would be the fence, but we are using a semaphore
-                    null,
-                    &image_index,
+            if (needs_render and self.wayland_handle.state.frame_ready) {
+                std.log.debug("Rendering...", .{});
+                needs_render = false;
+
+                // If window resized, we must recreate the swapchain
+                if (window_resized) {
+                    window_resized = false;
+                    try self.recreateSwapchain();
+                }
+
+                // Stops CPU from overwriting buffers currently in flight, this garuntee that the GPU has finished working
+                // on `current_frame` before we start overwriting stuff.
+                try handleError(
+                    c.vkWaitForFences(
+                        self.device,
+                        1,
+                        &self.in_flight_fences[current_frame],
+                        c.VK_TRUE,
+                        std.math.maxInt(u64),
+                    ),
                 );
 
-                if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
-                    try self.recreateSwapchain();
-                    continue;
-                } else if (acquire_result != c.VK_SUCCESS and acquire_result != c.VK_SUBOPTIMAL_KHR) {
-                    return error.VulkanAcquireFailed;
-                }
-            }
+                // Retrieve the image of the next swapchain image
+                var image_index: u32 = undefined;
+                {
+                    const acquire_result = c.vkAcquireNextImageKHR(
+                        self.device,
+                        self.swapchain,
+                        std.math.maxInt(u64),
+                        // Is when the image is safe to draw to, can be either a semaphore or a fence. Note we return
+                        // BEFORE the semaphore is signaled! So it must be checked.
+                        self.image_availible_semaphore[current_frame],
+                        // This would be the fence, but we are using a semaphore
+                        null,
+                        &image_index,
+                    );
 
-            // Only reset the fence once we know we are definitely submitting work
-            try handleError(
-                c.vkResetFences(
-                    self.device,
-                    1,
-                    &self.in_flight_fences[current_frame],
-                ),
-            );
-
-            // Update uniforms buffers
-            {
-                // TODO: this is ugly as sin, and its because our use of anyopque
-                const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
-                uniform_map[0] = .{
-                    .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
-                    .camera_pos = self.camera_pos,
-                    .scale = self.scale,
-                };
-            }
-
-            // Update QuadVertex buffers for our nodes
-            var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
-            defer quad_vertices.deinit(self.allocator);
-            {
-                for (self.nodes) |node| {
-                    try node.appendVerticesNode(self.allocator, &quad_vertices);
-                }
-                for (self.nodes) |node| {
-                    try node.appendVerticesPins(self.allocator, &quad_vertices);
+                    if (acquire_result == c.VK_ERROR_OUT_OF_DATE_KHR) {
+                        try self.recreateSwapchain();
+                        continue;
+                    } else if (acquire_result != c.VK_SUCCESS and acquire_result != c.VK_SUBOPTIMAL_KHR) {
+                        return error.VulkanAcquireFailed;
+                    }
                 }
 
-                // TODO: this is ugly as sin, and its because our use of anyopque
+                // Only reset the fence once we know we are definitely submitting work
+                try handleError(
+                    c.vkResetFences(
+                        self.device,
+                        1,
+                        &self.in_flight_fences[current_frame],
+                    ),
+                );
+
+                // Update uniforms buffers
+                {
+                    // TODO: this is ugly as sin, and its because our use of anyopque
+                    const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
+                    uniform_map[0] = .{
+                        .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
+                        .camera_pos = self.camera_pos,
+                        .scale = self.scale,
+                    };
+                }
+
+                // Update QuadVertex buffers for our nodes
+                var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
+                defer quad_vertices.deinit(self.allocator);
+                {
+                    for (self.nodes) |node| {
+                        try node.appendVerticesNode(self.allocator, &quad_vertices);
+                    }
+                    for (self.nodes) |node| {
+                        try node.appendVerticesPins(self.allocator, &quad_vertices);
+                    }
+
+                    // TODO: this is ugly as sin, and its because our use of anyopque
+                    if (quad_vertices.items.len > 0) {
+                        const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                        @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
+                    }
+                }
+
+                // Update BexierVertex buffers for our connections
+                var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
+                defer bezier_vertices.deinit(self.allocator);
+                {
+                    for (self.nodes) |node| {
+                        try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
+                    }
+
+                    if (bezier_vertices.items.len > 0) {
+                        // TODO: this is ugly as sin, and its because our use of anyopque
+                        const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                        @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
+                    }
+                }
+
+                // Update TextVertex buffers for our text
+                var text_vertices = try std.ArrayList(types.TextVertex).initCapacity(self.allocator, 0);
+                defer text_vertices.deinit(self.allocator);
+                {
+                    for (self.nodes) |node| {
+                        try node.appendAllText(self.allocator, self.font_atlas, &text_vertices);
+                    }
+
+                    const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(self.text_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                    @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
+                }
+
+                // Reset command buffer for the current frame
+                const cmd = self.command_buffers[current_frame];
+                try util.resetCommandBuffer(cmd);
+                try util.beginCommandBuffer(cmd);
+
+                c.vkCmdBeginRenderPass(cmd, &c.VkRenderPassBeginInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                    .pNext = null,
+                    .renderPass = self.render_pass,
+                    .framebuffer = self.framebuffers[image_index],
+                    .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_extent },
+                    .clearValueCount = 1,
+                    .pClearValues = &c.VkClearValue{
+                        .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } },
+                    },
+                }, c.VK_SUBPASS_CONTENTS_INLINE);
+
+                c.vkCmdSetViewport(cmd, 0, 1, &c.VkViewport{
+                    .x = 0.0,
+                    .y = 0,
+                    .width = @floatFromInt(self.swap_extent.width),
+                    .height = @as(f32, @floatFromInt(self.swap_extent.height)),
+                    .minDepth = 0.0,
+                    .maxDepth = 1.0,
+                });
+
+                c.vkCmdSetScissor(cmd, 0, 1, &c.VkRect2D{
+                    .offset = .{ .x = 0, .y = 0 },
+                    .extent = self.swap_extent,
+                });
+
                 if (quad_vertices.items.len > 0) {
-                    const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
-                    @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
-                }
-            }
+                    const offsets = [_]c.VkDeviceSize{0};
+                    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
+                    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                    c.vkCmdBindDescriptorSets(
+                        cmd,
+                        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        self.pipeline_layout,
+                        0,
+                        1,
+                        &self.descriptor_sets[current_frame],
+                        0,
+                        null,
+                    );
 
-            // Update BexierVertex buffers for our connections
-            var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
-            defer bezier_vertices.deinit(self.allocator);
-            {
-                for (self.nodes) |node| {
-                    try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
+                    c.vkCmdDraw(cmd, @intCast(quad_vertices.items.len), 1, 0, 0);
                 }
 
                 if (bezier_vertices.items.len > 0) {
-                    // TODO: this is ugly as sin, and its because our use of anyopque
-                    const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
-                    @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
+                    const offsets = [_]c.VkDeviceSize{0};
+                    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.bezier_vertex_graphics_pipeline);
+                    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.bezier_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                    c.vkCmdBindDescriptorSets(
+                        cmd,
+                        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        self.pipeline_layout,
+                        0,
+                        1,
+                        &self.descriptor_sets[current_frame],
+                        0,
+                        null,
+                    );
+
+                    c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
                 }
-            }
 
-            // Update TextVertex buffers for our text
-            var text_vertices = try std.ArrayList(types.TextVertex).initCapacity(self.allocator, 0);
-            defer text_vertices.deinit(self.allocator);
-            {
-                for (self.nodes) |node| {
-                    try node.appendAllText(self.allocator, self.font_atlas, &text_vertices);
+                if (text_vertices.items.len > 0) {
+                    const offsets = [_]c.VkDeviceSize{0};
+                    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.text_vertex_graphics_pipeline);
+                    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.text_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                    c.vkCmdBindDescriptorSets(
+                        cmd,
+                        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        self.pipeline_layout,
+                        0,
+                        1,
+                        &self.descriptor_sets[current_frame],
+                        0,
+                        null,
+                    );
+
+                    c.vkCmdDraw(cmd, @intCast(text_vertices.items.len), 1, 0, 0);
                 }
 
-                const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(self.text_vertex_buffer_set.vkBuffersMapped[current_frame]));
-                @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
+                c.vkCmdEndRenderPass(cmd);
+                try handleError(c.vkEndCommandBuffer(cmd));
+
+                const wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+                const submit_info = c.VkSubmitInfo{
+                    .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                    .pNext = null,
+                    .waitSemaphoreCount = 1,
+                    // Wait until the image is availible before trying to render
+                    .pWaitSemaphores = @ptrCast(&self.image_availible_semaphore[current_frame]),
+                    .pWaitDstStageMask = @ptrCast(&wait_stages),
+                    .commandBufferCount = 1,
+                    .pCommandBuffers = &cmd,
+                    .signalSemaphoreCount = 1,
+                    // Signal this when we are done rendering
+                    .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
+                };
+
+                // Submit commands
+                try handleError(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.in_flight_fences[current_frame]));
+
+                // Request new frame
+                self.wayland_handle.request_frame_callback();
+
+                // Present
+                const present_info = c.VkPresentInfoKHR{
+                    .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                    .pNext = null,
+                    .waitSemaphoreCount = 1,
+                    // Wait until the image is done rendering before presenting it
+                    .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
+                    .swapchainCount = 1,
+                    .pSwapchains = @ptrCast(&self.swapchain),
+                    .pImageIndices = &image_index,
+                    .pResults = null,
+                };
+
+                const present_result = c.vkQueuePresentKHR(self.present_queue, &present_info);
+
+                if (present_result == c.VK_ERROR_OUT_OF_DATE_KHR or present_result == c.VK_SUBOPTIMAL_KHR) {
+                    window_resized = true;
+                } else if (present_result != c.VK_SUCCESS) {
+                    return error.VulkanPresentFailed;
+                }
+
+                current_frame = (current_frame + 1) % FRAMES_IN_FLIGHT;
             }
-
-            // Reset command buffer for the current frame
-            const cmd = self.command_buffers[current_frame];
-            try util.resetCommandBuffer(cmd);
-            try util.beginCommandBuffer(cmd);
-
-            c.vkCmdBeginRenderPass(cmd, &c.VkRenderPassBeginInfo{
-                .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                .pNext = null,
-                .renderPass = self.render_pass,
-                .framebuffer = self.framebuffers[image_index],
-                .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_extent },
-                .clearValueCount = 1,
-                .pClearValues = &c.VkClearValue{
-                    .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } },
-                },
-            }, c.VK_SUBPASS_CONTENTS_INLINE);
-
-            c.vkCmdSetViewport(cmd, 0, 1, &c.VkViewport{
-                .x = 0.0,
-                .y = 0,
-                .width = @floatFromInt(self.swap_extent.width),
-                .height = @as(f32, @floatFromInt(self.swap_extent.height)),
-                .minDepth = 0.0,
-                .maxDepth = 1.0,
-            });
-
-            c.vkCmdSetScissor(cmd, 0, 1, &c.VkRect2D{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.swap_extent,
-            });
-
-            if (quad_vertices.items.len > 0) {
-                const offsets = [_]c.VkDeviceSize{0};
-                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
-                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-                c.vkCmdBindDescriptorSets(
-                    cmd,
-                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &self.descriptor_sets[current_frame],
-                    0,
-                    null,
-                );
-
-                c.vkCmdDraw(cmd, @intCast(quad_vertices.items.len), 1, 0, 0);
-            }
-
-            if (bezier_vertices.items.len > 0) {
-                const offsets = [_]c.VkDeviceSize{0};
-                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.bezier_vertex_graphics_pipeline);
-                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.bezier_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-                c.vkCmdBindDescriptorSets(
-                    cmd,
-                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &self.descriptor_sets[current_frame],
-                    0,
-                    null,
-                );
-
-                c.vkCmdDraw(cmd, @intCast(bezier_vertices.items.len), 1, 0, 0);
-            }
-
-            if (text_vertices.items.len > 0) {
-                const offsets = [_]c.VkDeviceSize{0};
-                c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.text_vertex_graphics_pipeline);
-                c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.text_vertex_buffer_set.vkBuffers[current_frame], &offsets);
-                c.vkCmdBindDescriptorSets(
-                    cmd,
-                    c.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &self.descriptor_sets[current_frame],
-                    0,
-                    null,
-                );
-
-                c.vkCmdDraw(cmd, @intCast(text_vertices.items.len), 1, 0, 0);
-            }
-
-            c.vkCmdEndRenderPass(cmd);
-            try handleError(c.vkEndCommandBuffer(cmd));
-
-            const wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-            const submit_info = c.VkSubmitInfo{
-                .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .pNext = null,
-                .waitSemaphoreCount = 1,
-                // Wait until the image is availible before trying to render
-                .pWaitSemaphores = @ptrCast(&self.image_availible_semaphore[current_frame]),
-                .pWaitDstStageMask = @ptrCast(&wait_stages),
-                .commandBufferCount = 1,
-                .pCommandBuffers = &cmd,
-                .signalSemaphoreCount = 1,
-                // Signal this when we are done rendering
-                .pSignalSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
-            };
-
-            // Submit commands
-            try handleError(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.in_flight_fences[current_frame]));
-
-            // Present
-            const present_info = c.VkPresentInfoKHR{
-                .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                .pNext = null,
-                .waitSemaphoreCount = 1,
-                // Wait until the image is done rendering before presenting it 
-                .pWaitSemaphores = @ptrCast(&self.render_finished_semaphore[image_index]),
-                .swapchainCount = 1,
-                .pSwapchains = @ptrCast(&self.swapchain),
-                .pImageIndices = &image_index,
-                .pResults = null,
-            };
-
-            const present_result = c.vkQueuePresentKHR(self.present_queue, &present_info);
-
-            if (present_result == c.VK_ERROR_OUT_OF_DATE_KHR or present_result == c.VK_SUBOPTIMAL_KHR) {
-                window_resized = true;
-            } else if (present_result != c.VK_SUCCESS) {
-                return error.VulkanPresentFailed;
-            }
-
-            current_frame = (current_frame + 1) % FRAMES_IN_FLIGHT;
         }
 
         // Ensure the GPU has finished everything before tearing down
@@ -657,15 +694,6 @@ pub const App = struct {
     pub fn recreateSwapchain(self: *App) !void {
         std.log.info("Recreating swapchain...", .{});
         errdefer std.log.info("Recreating swapchain failed", .{});
-
-        // Get the new window size from SDL
-        var w: c_int = 0;
-        var h: c_int = 0;
-        _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
-        while (w == 0 or h == 0) {
-            _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
-            _ = c.SDL_WaitEvent(null); 
-        }
 
         // Wait for idle before recreating the swapchian
         _ = c.vkDeviceWaitIdle(self.device);
@@ -679,7 +707,7 @@ pub const App = struct {
 
         // Reinitialize
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = try util.getVkExtentFromSDLWindow(self.window, self.surface_capabilities);
+        self.swap_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
         self.swapchain = try util.initVkSwapchain(
             self.device,
             self.surface,
@@ -700,10 +728,10 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        defer self.wayland_handle.deinit();
         defer self.pw_manager.deinit();
         defer self.frame_arena.deinit();
-        defer util.sdlQuit();
-        defer util.sdlDestroyWindow(self.window);
+        defer self.ring.deinit();
         defer util.deinitVkInstance(self.instance);
         defer util.deinitVkSurface(self.instance, self.surface);
         defer util.deinitVkDevice(self.device);
