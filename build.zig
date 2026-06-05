@@ -60,6 +60,22 @@ fn addMsdfAtlasGenStep(b: *std.Build, font_src: []const u8, out_png: []const u8,
     return msdf;
 }
 
+fn addWaylandProtocol(
+    b: *std.Build,
+    xml_path: []const u8,
+    name: []const u8,
+) struct { c: std.Build.LazyPath, h_dir: std.Build.LazyPath } {
+    const scanner_h = b.addSystemCommand(&.{ "wayland-scanner", "client-header" });
+    scanner_h.addFileArg(b.path(xml_path));
+    const h_file = scanner_h.addOutputFileArg(b.fmt("{s}.h", .{name}));
+
+    const scanner_c = b.addSystemCommand(&.{ "wayland-scanner", "private-code" });
+    scanner_c.addFileArg(b.path(xml_path));
+    const c_file = scanner_c.addOutputFileArg(b.fmt("{s}.c", .{name}));
+
+    return .{ .c = c_file, .h_dir = h_file.dirname() };
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -140,12 +156,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .link_libc = true,
     });
-    mod.linkSystemLibrary("sdl3", .{
+    mod.linkSystemLibrary("wayland-client", .{
         .needed = true,
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
-    mod.linkSystemLibrary("SDL3_image", .{
+    mod.linkSystemLibrary("xkbcommon", .{
         .needed = true,
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
@@ -155,7 +171,7 @@ pub fn build(b: *std.Build) void {
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
-    mod.linkSystemLibrary("pipewire-0.3", .{
+    mod.linkSystemLibrary("libpipewire-0.3", .{
         .needed = true,
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
@@ -163,6 +179,26 @@ pub fn build(b: *std.Build) void {
     mod.addIncludePath(
         b.path("./src/"),
     );
+    mod.addCSourceFile(.{
+        .file = b.path("src/stb/stb_image.c"),
+        .flags = &[_][]const u8{
+            "-O3",
+        },
+    });
+
+    const wl_core = addWaylandProtocol(b, "src/protocols/wayland.xml", "wayland-client-protocol");
+    mod.addIncludePath(wl_core.h_dir);
+    mod.addCSourceFile(.{
+        .file = wl_core.c,
+        .flags = &[_][]const u8{"-O3"},
+    });
+
+    const xdg_shell = addWaylandProtocol(b, "src/protocols/xdg-shell.xml", "xdg-shell-protocol");
+    mod.addIncludePath(xdg_shell.h_dir);
+    mod.addCSourceFile(.{
+        .file = xdg_shell.c,
+        .flags = &[_][]const u8{"-O3"},
+    });
 
     const exe = b.addExecutable(.{
         .name = "pijpkijk",

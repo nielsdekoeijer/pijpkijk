@@ -8,9 +8,6 @@ pkgs.mkShell rec {
     pkgs.zls
     pkgs.bash
     pkgs.file
-    pkgs.sdl3-image.dev
-    pkgs.sdl3.dev
-    pkgs.sdl3.lib
     pkgs.shader-slang
     pkgs.vulkan-headers
     pkgs.vulkan-loader
@@ -18,6 +15,11 @@ pkgs.mkShell rec {
     pkgs.msdf-atlas-gen
     pkgs.pipewire.dev
     pkgs.pkg-config
+    # future
+    pkgs.wayland
+    pkgs.wayland-scanner
+    pkgs.wayland-protocols
+    pkgs.libxkbcommon.dev
   ];
 
   shellHook = ''

@@ -74,8 +74,8 @@ fn checkRequestedVkInstanceExtensionsSupported(
     allocator: std.mem.Allocator,
     requested_extensions: []const [*:0]const u8,
 ) !void {
-    std.log.debug("Trying to checking if requested vulkan instance extensions are supported...", .{});
-    errdefer std.log.err("Trying to checking if requested vulkan instance extensions are supported failed", .{});
+    std.log.debug("Trying to check if requested vulkan instance extensions are supported...", .{});
+    errdefer std.log.err("Trying to check if requested vulkan instance extensions are supported failed", .{});
 
     var supported_extensions = try getSupportedVkInstanceExtensions(allocator);
     defer {
@@ -100,7 +100,7 @@ fn checkRequestedVkInstanceExtensionsSupported(
         }
     }
 
-    defer std.log.debug("Trying to checking if requested vulkan instance extensions are supported OK", .{});
+    defer std.log.debug("Trying to check if requested vulkan instance extensions are supported OK", .{});
 }
 
 /// Creates an arraylist of all supported instance layers
@@ -185,8 +185,6 @@ pub fn initVkInstance(
     try extensions.append(allocator, c.VK_KHR_SURFACE_EXTENSION_NAME);
     try extensions.append(allocator, c.VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
 
     if (@import("builtin").mode == .Debug) {
         try extensions.append(allocator, c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -933,6 +931,8 @@ pub fn initVkDevice(
     var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME);
+    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
     try checkRequestedVkDeviceExtensionsSupported(allocator, physical_device, extensions.items);
 
     // create our list of requested instance layers
@@ -2396,7 +2396,11 @@ pub fn initVkFence(device: c.VkDevice) !c.VkFence {
         device,
         &c.VkFenceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = null,
+            .pNext = &c.VkExportFenceCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO,
+                .pNext = null,
+                .handleTypes = c.VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQUE_FD_BIT,
+            },
             .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         },
         null,
