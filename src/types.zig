@@ -1,6 +1,8 @@
 const c = @import("c.zig").c;
 const std = @import("std");
 
+// =Colors=============================================================================================================
+
 /// Helper for colors
 pub const VibrantColor = enum(u8) {
     NeonBlaze,
@@ -131,25 +133,7 @@ pub const FontAtlas = struct {
     }
 };
 
-/// Helper type representing a 4x4 matrix
-pub const Mat4 = extern struct {
-    data: [16]f32,
-};
-
-/// Helper type representing a 4 vector
-pub const Vec4 = extern struct {
-    x: f32,
-    y: f32,
-    z: f32,
-    w: f32,
-};
-
-/// Helper type representing a 3 vector
-pub const Vec3 = extern struct {
-    x: f32,
-    y: f32,
-    z: f32,
-};
+// =GPUBuffers=========================================================================================================
 
 /// Uniform buffer
 pub const Uniform = extern struct {
@@ -165,7 +149,7 @@ pub const Uniform = extern struct {
     _: u32 = 0,
 };
 
-/// QuadVertex buffer
+/// QuadVertex buffer, a vertex that constructs a roundable quad
 pub const QuadVertex = extern struct {
     pos: [2]f32,
     color: [4]f32,
@@ -216,6 +200,68 @@ pub const QuadVertex = extern struct {
                 .offset = @offsetOf(QuadVertex, "radii"),
             },
         };
+    }
+
+    /// Helper function to append a quad of a solid color to a list of vertices
+    /// TODO: this whole structure is super inefficient, note how we are copying color, hs and radii many times?
+    fn append(
+        allocator: std.mem.Allocator,
+        list: *std.ArrayListUnmanaged(QuadVertex),
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [4]f32,
+        radii: [4]f32,
+    ) !void {
+        const hx = w / 2.0;
+        const hy = h / 2.0;
+        const hs = [_]f32{ hx, hy };
+
+        try list.appendSlice(allocator, &[_]QuadVertex{
+            .{
+                .pos = .{ x, y },
+                .local_pos = .{ -hx, -hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+            .{
+                .pos = .{ x, y + h },
+                .local_pos = .{ -hx, hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+            .{
+                .pos = .{ x + w, y },
+                .local_pos = .{ hx, -hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+            .{
+                .pos = .{ x + w, y + h },
+                .local_pos = .{ hx, hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+            .{
+                .pos = .{ x, y + h },
+                .local_pos = .{ -hx, hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+            .{
+                .pos = .{ x + w, y },
+                .local_pos = .{ hx, -hy },
+                .half_size = hs,
+                .color = color,
+                .radii = radii,
+            },
+        });
     }
 };
 
@@ -285,10 +331,97 @@ pub const BezierVertex = extern struct {
             .{
                 .location = 7,
                 .binding = 0,
-                .format = c.VK_FORMAT_R32G32B32A32_SFLOAT,
+                .format = c.VK_FORMAT_R32_SFLOAT,
                 .offset = @offsetOf(BezierVertex, "thickness"),
             },
         };
+    }
+
+    pub fn append(
+        allocator: std.mem.Allocator,
+        list: *std.ArrayListUnmanaged(BezierVertex),
+        thickness: f32,
+        padding: f32,
+        color_beg: [4]f32,
+        color_end: [4]f32,
+        p0: [2]f32,
+        p1: [2]f32,
+        p2: [2]f32,
+        p3: [2]f32,
+    ) !void {
+        const min_x = @min(p0[0], @min(p3[0], @min(p1[0], p2[0])));
+        const max_x = @max(p0[0], @max(p3[0], @max(p1[0], p2[0])));
+        const min_y = @min(p0[1], @min(p3[1], @min(p1[1], p2[1])));
+        const max_y = @max(p0[1], @max(p3[1], @max(p1[1], p2[1])));
+
+        const x = min_x - padding;
+        const y = min_y - padding;
+        const w = (max_x - min_x) + (padding * 2);
+        const h = (max_y - min_y) + (padding * 2);
+
+        try list.appendSlice(allocator, &[_]BezierVertex{
+            .{
+                .pos = .{ x, y },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+            .{
+                .pos = .{ x, y + h },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+            .{
+                .pos = .{ x + w, y },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+
+            .{
+                .pos = .{ x + w, y + h },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+            .{
+                .pos = .{ x, y + h },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+            .{
+                .pos = .{ x + w, y },
+                .p0 = p0,
+                .p1 = p1,
+                .p2 = p2,
+                .p3 = p3,
+                .thickness = thickness,
+                .color_beg = color_beg,
+                .color_end = color_end,
+            },
+        });
     }
 };
 
@@ -328,7 +461,102 @@ pub const TextVertex = extern struct {
             },
         };
     }
+
+    // TODO: vibed I don't get this part
+    pub fn append(
+        allocator: std.mem.Allocator,
+        atlas: FontAtlas,
+        text: []const u8,
+        align_mode: enum { Left, Center, Right },
+        pos_x: f32,
+        pos_y: f32,
+        max_w: f32,
+        font_size: f32,
+        list: *std.ArrayList(TextVertex),
+    ) !void {
+        const scale = font_size / atlas.parsed.value.metrics.emSize;
+        const atlas_w = @as(f32, @floatFromInt(atlas.parsed.value.atlas.width));
+        const atlas_h = @as(f32, @floatFromInt(atlas.parsed.value.atlas.height));
+
+        var current_width: f32 = 0.0;
+        var dot_width: f32 = 0.0;
+        if (atlas.getGlyph('.')) |g| dot_width = g.advance * scale;
+
+        var draw_len: usize = text.len;
+        var needs_dots = false;
+        var measured_w: f32 = 0.0;
+
+        for (text) |char| {
+            const g = atlas.getGlyph(char) orelse continue;
+            const adv = g.advance * scale;
+            if (current_width + adv > max_w) {
+                needs_dots = true;
+                break;
+            }
+            current_width += adv;
+            measured_w = current_width;
+        }
+
+        if (needs_dots) {
+            current_width = 0.0;
+            const target_w = max_w - (dot_width * 3.0);
+            draw_len = 0;
+            if (target_w > 0) {
+                for (text) |char| {
+                    const g = atlas.getGlyph(char) orelse continue;
+                    const adv = g.advance * scale;
+                    if (current_width + adv > target_w) break;
+                    current_width += adv;
+                    draw_len += 1;
+                }
+            }
+            measured_w = current_width + (dot_width * 3.0);
+        }
+
+        var cursor_x: f32 = switch (align_mode) {
+            .Left => pos_x,
+            .Center => pos_x - (measured_w / 2.0),
+            .Right => pos_x - measured_w,
+        };
+        const cursor_y = pos_y;
+        const text_color = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+
+        const dots_to_draw: usize = if (needs_dots) 3 else 0;
+        var i: usize = 0;
+
+        while (i < draw_len + dots_to_draw) : (i += 1) {
+            const char = if (i < draw_len) text[i] else '.';
+            const glyph = atlas.getGlyph(char) orelse continue;
+
+            if (glyph.planeBounds) |pb| {
+                if (glyph.atlasBounds) |ab| {
+                    const screen_l = cursor_x + (pb.left * scale);
+                    const screen_r = cursor_x + (pb.right * scale);
+                    const screen_t = cursor_y - (pb.top * scale);
+                    const screen_b = cursor_y - (pb.bottom * scale);
+
+                    const uv_l = ab.left / atlas_w;
+                    const uv_r = ab.right / atlas_w;
+                    const uv_t = (atlas_h - ab.top) / atlas_h;
+                    const uv_b = (atlas_h - ab.bottom) / atlas_h;
+
+                    const quads = [_]TextVertex{
+                        .{ .pos = .{ screen_l, screen_t }, .uv = .{ uv_l, uv_t }, .color = text_color },
+                        .{ .pos = .{ screen_l, screen_b }, .uv = .{ uv_l, uv_b }, .color = text_color },
+                        .{ .pos = .{ screen_r, screen_t }, .uv = .{ uv_r, uv_t }, .color = text_color },
+                        .{ .pos = .{ screen_r, screen_b }, .uv = .{ uv_r, uv_b }, .color = text_color },
+                        .{ .pos = .{ screen_l, screen_b }, .uv = .{ uv_l, uv_b }, .color = text_color },
+                        .{ .pos = .{ screen_r, screen_t }, .uv = .{ uv_r, uv_t }, .color = text_color },
+                    };
+                    try list.appendSlice(allocator, &quads);
+                }
+            }
+            cursor_x += glyph.advance * scale;
+        }
+    }
 };
+
+// ====================================================================================================================
 
 /// Representation of an input pin
 pub const InpPin = struct {
@@ -531,6 +759,7 @@ pub const Node = struct {
     }
 
     // In src/types.zig, inside the Node or a new relevant context:
+    // TODO: LLM trash its wrong
     pub fn appendVerticesBezier(
         self: Node,
         allocator: std.mem.Allocator,
@@ -775,3 +1004,265 @@ pub const Node = struct {
         return false;
     }
 };
+
+// =Pipewire===========================================================================================================
+
+pub const PipewireLink = struct {
+    node_id: u32,
+    port_id: u32,
+    link_id: u32,
+};
+
+pub const PipewirePort = struct {
+    name: []const u8,
+    connections: std.AutoHashMapUnmanaged(u32, PipewireLink) = .empty,
+};
+
+/// Height spacing between nodes
+pub const H_NODE_SPACING: f32 = 100.0;
+
+/// Width spacing between nodes
+pub const W_NODE_SPACING: f32 = 300.0;
+
+pub const PipewireNode = struct {
+    /// Standard color of the node
+    pub const NODE_COLOR: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
+
+    /// Fixed width of the node
+    pub const W_NODE: f32 = 200.0;
+
+    /// Height reserved for the the title of the node
+    pub const H_OFFSET_TITLE: f32 = 50.0;
+
+    /// Width reserved for the the title of the node
+    pub const W_OFFSET_TITLE: f32 = 0.0;
+
+    // Distance from left or right edge for a given pin
+    pub const W_OFFSET_OUTER_PIN: f32 = 0.0;
+
+    /// Height reserved per pin
+    pub const H_OFFSET_OUTER_PIN: f32 = 50.0;
+
+    /// Width internal offset before drawing the pin
+    pub const W_OFFSET_INNER_PIN: f32 = 0.0;
+
+    /// Height internal offset before drawing the pin
+    pub const H_OFFSET_INNER_PIN: f32 = 12.5;
+
+    /// Height of pin
+    pub const H_PIN: f32 = 25;
+
+    /// Width of pin
+    pub const W_PIN: f32 = 12.5;
+
+    node_id: u32,
+    name: []const u8,
+    inps: std.AutoHashMapUnmanaged(u32, PipewirePort) = .empty,
+    outs: std.AutoHashMapUnmanaged(u32, PipewirePort) = .empty,
+
+    // for drawing, honestly probably shouldnt live here but I'll allow it
+    x: ?f32 = null,
+    y: ?f32 = null,
+    port_color: ?[4]f32 = null,
+
+    /// Computes the maximum number of pins for displaying the node, i.e. max(inp_count, out_count).
+    fn computePortSlotCount(self: PipewireNode) usize {
+        return @max(self.inps.size, self.outs.size);
+    }
+
+    /// Computes the total height of the given node
+    pub fn computeNodeHeight(self: PipewireNode) f32 {
+        return H_OFFSET_TITLE + (H_OFFSET_OUTER_PIN * @as(f32, @floatFromInt(self.computePortSlotCount())));
+    }
+
+    fn computePortColor(self: PipewireNode, index: usize) [4]f32 {
+        const base = self.port_color.?;
+        const burn = 1.0 - 0.8 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computePortSlotCount()));
+        return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
+    }
+    /// Grab the x-coordinate of the given input pin
+    fn getInpPortX(self: PipewireNode, _: usize) f32 {
+        return self.x.?;
+    }
+
+    /// Grab the x-coordinate of the given output pin
+    fn getOutPortX(self: PipewireNode, _: usize) f32 {
+        return self.x.? + W_NODE;
+    }
+
+    /// Grab the y-coordinate of the given input pin
+    fn getInpPortY(self: PipewireNode, index: usize) f32 {
+        const findex = @as(f32, @floatFromInt(index));
+        return self.y.? + H_OFFSET_TITLE + (findex * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
+    }
+
+    /// Grab the y-coordinate of the given output pin
+    fn getOutPortY(self: PipewireNode, index: usize) f32 {
+        const findex = @as(f32, @floatFromInt(index));
+        return self.y.? + H_OFFSET_TITLE + (findex * H_OFFSET_OUTER_PIN) + H_OFFSET_INNER_PIN + H_PIN / 2;
+    }
+
+    /// Appends the QuadVertexs required to draw the current node to an existing list of vertives
+    pub fn appendVerticesNode(self: PipewireNode, allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(QuadVertex)) !void {
+        const H_NODE = self.computeNodeHeight();
+        const color: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
+        const radii: [4]f32 = .{ 10.0, 10.0, 10.0, 10.0 };
+        try QuadVertex.append(allocator, list, self.x.?, self.y.?, W_NODE, H_NODE, color, radii);
+    }
+
+    /// Appends the QuadVertexs required to draw the pins of the current node to an existing list of vertives
+    pub fn appendVerticesPorts(
+        self: PipewireNode,
+        allocator: std.mem.Allocator,
+        list: *std.ArrayListUnmanaged(QuadVertex),
+    ) !void {
+        // LHS of the node
+        {
+            const H_BEG: f32 = H_OFFSET_TITLE;
+            const W_BEG: f32 = 0;
+            const radii = .{ 2.5, 2.5, 0.0, 0.0 };
+            for (0..self.inps.size) |i| {
+                const px = self.x.? + W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
+                const py = self.y.? + H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
+                try QuadVertex.append(allocator, list, px, py, W_PIN, H_PIN, self.computePortColor(i), radii);
+            }
+        }
+
+        // RHS of the node
+        {
+            const H_BEG: f32 = H_OFFSET_TITLE;
+            const W_BEG: f32 = W_NODE - W_OFFSET_INNER_PIN * 2 - W_PIN;
+            const radii = .{ 0.0, 0.0, 2.5, 2.5 };
+            for (0..self.outs.size) |i| {
+                const px = self.x.? + W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
+                const py = self.y.? + H_BEG + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
+                try QuadVertex.append(allocator, list, px, py, W_PIN, H_PIN, self.computePortColor(i), radii);
+            }
+        }
+    }
+
+    pub fn getInpPortVisualIndex(self: PipewireNode, port_id: u32) ?usize {
+        var it = self.inps.iterator();
+        var i: usize = 0;
+        while (it.next()) |entry| : (i += 1) {
+            if (entry.key_ptr.* == port_id) return i;
+        }
+
+        return null;
+    }
+
+    /// Appends the BezierVertexs required to draw the links of the current node
+    pub fn appendVerticesLinks(
+        self: PipewireNode,
+        allocator: std.mem.Allocator,
+        other_nodes: std.AutoHashMapUnmanaged(u32, PipewireNode),
+        list: *std.ArrayListUnmanaged(BezierVertex),
+    ) !void {
+        var i: usize = 0;
+        var it = self.outs.iterator();
+
+        while (it.next()) |out_entry| : (i += 1) {
+            const out_port = out_entry.value_ptr.*;
+            var conn_it = out_port.connections.iterator();
+
+            while (conn_it.next()) |conn_entry| {
+                const link = conn_entry.value_ptr.*;
+                const target_node = other_nodes.get(link.node_id) orelse continue;
+
+                // Find where this input port actually sits visually
+                const target_inp_index = target_node.getInpPortVisualIndex(
+                    link.port_id,
+                ) orelse return error.PipewireError;
+
+                // Compute exact centers of the output and input pins
+                const p0 = [2]f32{
+                    self.x.? + W_NODE,
+                    self.y.? + H_OFFSET_TITLE + (@as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN) + //
+                        H_OFFSET_INNER_PIN + (H_PIN / 2.0),
+                };
+
+                const p3 = [2]f32{
+                    target_node.x.?,
+                    target_node.y.? + H_OFFSET_TITLE + //
+                        (@as(f32, @floatFromInt(target_inp_index)) * H_OFFSET_OUTER_PIN) + //
+                        H_OFFSET_INNER_PIN + (H_PIN / 2.0),
+                };
+
+                const offset = @abs(p3[0] - p0[0]) / 2.0;
+
+                const p1 = [2]f32{
+                    p0[0] + offset,
+                    p0[1],
+                };
+
+                const p2 = [2]f32{
+                    p3[0] - offset,
+                    p3[1],
+                };
+
+                try BezierVertex.append(
+                    allocator,
+                    list,
+                    4.0,
+                    10.0,
+                    self.computePortColor(i),
+                    target_node.computePortColor(target_inp_index),
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                );
+            }
+        }
+    }
+
+    pub fn appendVerticesText(
+        self: PipewireNode,
+        allocator: std.mem.Allocator,
+        atlas: FontAtlas,
+        list: *std.ArrayListUnmanaged(TextVertex),
+    ) !void {
+        const title_max_w = W_NODE - 20.0;
+        const title_x = self.x.? + (W_NODE / 2.0);
+        const title_y = self.y.? + 30.0;
+
+        try TextVertex.append(allocator, atlas, self.name, .Center, title_x, title_y, title_max_w, 16.0, list);
+
+        {
+            var i: usize = 0;
+            var port_it = self.inps.iterator();
+            while (port_it.next()) |port| : (i += 1) {
+                const port_x = self.x.? + W_OFFSET_INNER_PIN + W_PIN + 8.0;
+                const port_y = self.getInpPortY(i) + 4.0;
+                const port_max_w = (W_NODE / 2.0) - W_PIN - 12.0;
+
+                try TextVertex.append(allocator, atlas, port.value_ptr.name, .Left, port_x, port_y, port_max_w, 12.0, list);
+            }
+        }
+
+        {
+            var i: usize = 0;
+            var port_it = self.outs.iterator();
+            while (port_it.next()) |port| : (i += 1) {
+                const port_x = self.x.? + W_NODE - W_OFFSET_INNER_PIN - W_PIN - 8.0;
+                const port_y = self.getInpPortY(i) + 4.0;
+                const port_max_w = (W_NODE / 2.0) - W_PIN - 12.0;
+
+                try TextVertex.append(allocator, atlas, port.value_ptr.name, .Right, port_x, port_y, port_max_w, 12.0, list);
+            }
+        }
+    }
+
+    // pub fn contains(self: Node, x: f32, y: f32) bool {
+    //     if (x >= self.x and x <= self.x + W_NODE) {
+    //         const H_NODE = self.computeNodeHeight();
+    //         if (y >= self.y and y <= self.y + H_NODE) {
+    //             return true;
+    //         }
+    //     }
+    //
+    //     return false;
+    // }
+};
+
+//

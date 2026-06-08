@@ -34,7 +34,7 @@ float4 main(FragmentInput input) : SV_Target {
     float t = 0.5; 
     
     // 2. Newton-Raphson iterations to find the closest point on curve
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         float2 point = get_bezier_point(t, input.p0, input.p1, input.p2, input.p3);
         float2 deriv = get_bezier_derivative(t, input.p0, input.p1, input.p2, input.p3);
         

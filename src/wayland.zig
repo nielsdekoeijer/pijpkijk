@@ -33,6 +33,7 @@ pub const WaylandHandle = struct {
             mouse_y: ?f32 = null,
             mouse_dx: f32 = 0,
             mouse_dy: f32 = 0,
+            scroll_y: f32 = 0,
             mouse_down_l: bool = false,
             mouse_down_r: bool = false,
         } = .{},
@@ -317,6 +318,29 @@ pub const WaylandHandle = struct {
             _ = serial;
             _ = surface;
         }
+        //
+        // /// When the mouse moves
+        // fn onMotion(
+        //     data: ?*anyopaque,
+        //     pointer: ?*c.struct_wl_pointer,
+        //     time: u32,
+        //     surface_x: c.wl_fixed_t,
+        //     surface_y: c.wl_fixed_t,
+        // ) callconv(.c) void {
+        //     // TODO: I dont understand what time does, maybe useful?
+        //     _ = time;
+        //     _ = pointer;
+        //
+        //     const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+        //     const x = @as(f32, @floatCast(c.wl_fixed_to_double(surface_x)));
+        //     const y = @as(f32, @floatCast(c.wl_fixed_to_double(surface_y)));
+        //
+        //     if (handle.state.input.mouse_x) |mx| handle.state.input.mouse_dx = x - mx;
+        //     if (handle.state.input.mouse_y) |my| handle.state.input.mouse_dy = y - my;
+        //
+        //     handle.state.input.mouse_x = x;
+        //     handle.state.input.mouse_y = y;
+        // }
 
         /// When the mouse moves
         fn onMotion(
@@ -326,7 +350,6 @@ pub const WaylandHandle = struct {
             surface_x: c.wl_fixed_t,
             surface_y: c.wl_fixed_t,
         ) callconv(.c) void {
-            // TODO: I dont understand what time does, maybe useful?
             _ = time;
             _ = pointer;
 
@@ -334,8 +357,9 @@ pub const WaylandHandle = struct {
             const x = @as(f32, @floatCast(c.wl_fixed_to_double(surface_x)));
             const y = @as(f32, @floatCast(c.wl_fixed_to_double(surface_y)));
 
-            if (handle.state.input.mouse_x) |mx| handle.state.input.mouse_dx = x - mx;
-            if (handle.state.input.mouse_y) |my| handle.state.input.mouse_dy = y - my;
+            // FIX: Accumulate the deltas using += instead of =
+            if (handle.state.input.mouse_x) |mx| handle.state.input.mouse_dx += x - mx;
+            if (handle.state.input.mouse_y) |my| handle.state.input.mouse_dy += y - my;
 
             handle.state.input.mouse_x = x;
             handle.state.input.mouse_y = y;
@@ -350,12 +374,32 @@ pub const WaylandHandle = struct {
             button: u32,
             state: u32,
         ) callconv(.c) void {
-            _ = data;
             _ = pointer;
             _ = serial;
             _ = time;
-            _ = button;
-            _ = state;
+
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+
+            // 272 is BTN_LEFT, 273 is BTN_RIGHT
+            switch (button) {
+                272 => {
+                    handle.state.input.mouse_down_l =
+                        (state == c.WL_POINTER_BUTTON_STATE_PRESSED);
+
+                    if (handle.state.input.mouse_down_l) {
+                        std.log.debug("Registered 'MOUSE_BUTTON_L' button press", .{});
+                    }
+                },
+                273 => {
+                    handle.state.input.mouse_down_r =
+                        (state == c.WL_POINTER_BUTTON_STATE_PRESSED);
+
+                    if (handle.state.input.mouse_down_r) {
+                        std.log.debug("Registered 'MOUSE_BUTTON_R' button press", .{});
+                    }
+                },
+                else => std.log.warn("Unsupported button press with code '{}'", .{button}),
+            }
         }
 
         /// On mouse scroll
@@ -366,11 +410,14 @@ pub const WaylandHandle = struct {
             axis: u32,
             value: c.wl_fixed_t,
         ) callconv(.c) void {
-            _ = data;
             _ = pointer;
             _ = time;
-            _ = axis;
-            _ = value;
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+
+            if (axis == c.WL_POINTER_AXIS_VERTICAL_SCROLL) {
+                handle.state.input.scroll_y += @as(f32, @floatCast(c.wl_fixed_to_double(value)));
+                std.log.debug("Registered 'SCROLL' with value {}", .{value});
+            }
         }
 
         /// Grouped events
@@ -618,6 +665,7 @@ pub const WaylandHandle = struct {
         fn OnPing(data: ?*anyopaque, wm_base: ?*c.struct_xdg_wm_base, serial: u32) callconv(.c) void {
             _ = data;
 
+            std.log.debug("Sending wayland pong...", .{});
             c.xdg_wm_base_pong(wm_base, serial);
         }
 

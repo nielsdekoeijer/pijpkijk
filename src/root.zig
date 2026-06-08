@@ -4,6 +4,7 @@ const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
 const util = @import("util.zig");
 const wayland = @import("wayland.zig");
+const pipewire = @import("pipewire.zig");
 const types = @import("types.zig");
 const graph = @import("graph.zig");
 
@@ -11,10 +12,12 @@ pub const FRAMES_IN_FLIGHT = 3;
 
 pub const UserData = enum(u64) {
     WAYLAND,
+    PIPEWIRE,
 };
 
 pub const App = struct {
     wayland_handle: *wayland.WaylandHandle,
+    pipewire_handle: *pipewire.PipewireHandle,
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
     allocator: std.mem.Allocator,
@@ -62,10 +65,6 @@ pub const App = struct {
     ring: std.os.linux.IoUring,
 
     // TEMP
-    pw_manager: *graph.PwGraph,
-    frame_arena: std.heap.ArenaAllocator,
-
-    // TEMP
     nodes: []types.Node,
     camera_pos: [2]f32,
     scale: f32,
@@ -78,11 +77,10 @@ pub const App = struct {
     const default_height = 600;
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) !App {
+        _ = io;
+
         var self: @This() = undefined;
         self.allocator = allocator;
-
-        self.pw_manager = try graph.PwGraph.init(allocator, io);
-        self.frame_arena = std.heap.ArenaAllocator.init(allocator);
 
         self.ring = try std.os.linux.IoUring.init(32, 0);
         errdefer self.ring.deinit();
@@ -104,6 +102,10 @@ pub const App = struct {
         while (!self.wayland_handle.surface_ready()) {
             try self.wayland_handle.flush_blocking();
         }
+
+        // =InitializePipewire=========================================================================================
+        self.pipewire_handle = try allocator.create(pipewire.PipewireHandle);
+        try pipewire.PipewireHandle.init(self.pipewire_handle, self.allocator);
 
         // =AqcuireVkInstance==========================================================================================
         self.instance = try util.initVkInstance(allocator);
@@ -331,10 +333,7 @@ pub const App = struct {
         errdefer util.deinitVkDescriptorSets(allocator, self.descriptor_sets);
 
         self.camera_pos = [_]f32{ -100, -100 };
-        self.scale = 1.0;
-
-        _ = self.frame_arena.reset(.retain_capacity);
-        self.nodes = try self.pw_manager.buildRenderNodes(self.frame_arena.allocator());
+        self.scale = 0.55;
 
         self.selected_node = null;
 
@@ -349,9 +348,25 @@ pub const App = struct {
         var current_frame: usize = 0;
         var window_resized = false;
         var needs_render = true;
+        var needs_state_update = false;
+
+        var gpu_frame_ready = [_]bool{ true, true, true };
 
         const wl_fd = c.wl_display_get_fd(self.wayland_handle.core.display);
-        _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
+        const pw_fd = self.pipewire_handle.fd();
+
+        _ = try self.ring.poll_add(
+            @intFromEnum(UserData.WAYLAND),
+            wl_fd,
+            std.posix.POLL.IN,
+        );
+
+        _ = try self.ring.poll_add(
+            @intFromEnum(UserData.PIPEWIRE),
+            pw_fd,
+            std.posix.POLL.IN,
+        );
+
         _ = try self.ring.submit();
 
         // Our main loop of the program
@@ -366,17 +381,37 @@ pub const App = struct {
 
             for (cqes[0..cqe_count]) |cqe| {
                 const user_data: UserData = @enumFromInt(cqe.user_data);
+                // std.log.debug("Received io_uring event: '{s}'", .{@tagName(user_data)});
                 switch (user_data) {
+                    UserData.PIPEWIRE => {
+                        if (cqe.res >= 0) {
+                            const revents = @as(u32, @bitCast(cqe.res));
+
+                            if ((revents & std.posix.POLL.IN) != 0) {
+                                try handleError(
+                                    c.pw_loop_iterate(self.pipewire_handle.loop, 0),
+                                );
+                            }
+                        }
+
+                        try self.pipewire_handle.update_graph_metadata();
+
+                        needs_state_update = true;
+
+                        _ = try self.ring.poll_add(@intFromEnum(UserData.PIPEWIRE), pw_fd, std.posix.POLL.IN);
+                    },
                     UserData.WAYLAND => {
                         if (cqe.res >= 0) {
                             const revents = @as(u32, @bitCast(cqe.res));
-                            
+
                             if ((revents & std.posix.POLL.IN) != 0) {
                                 _ = c.wl_display_dispatch(self.wayland_handle.core.display);
 
                                 needs_render = true;
                             }
                         }
+
+                        needs_state_update = true;
 
                         _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
                     },
@@ -390,59 +425,83 @@ pub const App = struct {
                 running = false;
             }
 
-            // Handle Mouse Input
-            // if (self.wayland_state.mouse_just_pressed) {
-            //     const world_x = (self.wayland_state.mouse_x / self.scale) + self.camera_pos[0];
-            //     const world_y = (self.wayland_state.mouse_y / self.scale) + self.camera_pos[1];
-            //
-            //     var i = self.nodes.len;
-            //     while (i > 0) {
-            //         i -= 1;
-            //         if (self.nodes[i].contains(world_x, world_y)) {
-            //             self.selected_node = i;
-            //             break;
-            //         }
-            //     }
-            //     self.wayland_state.mouse_just_pressed = false; // consume
-            // }
-            //
-            // if (self.wayland_state.mouse_just_released) {
-            //     self.selected_node = null;
-            //     self.wayland_state.mouse_just_released = false; // consume
-            // }
-            //
-            // if (self.wayland_state.mouse_button_down) {
-            //     const world_dx = self.wayland_state.mouse_x_delta / self.scale;
-            //     const world_dy = self.wayland_state.mouse_y_delta / self.scale;
-            //
-            //     if (self.selected_node) |node_index| {
-            //         self.nodes[node_index].x += world_dx;
-            //         self.nodes[node_index].y += world_dy;
-            //     } else {
-            //         self.camera_pos[0] -= world_dx;
-            //         self.camera_pos[1] -= world_dy;
-            //     }
-            // }
-            //
-            // // Consume deltas so the camera/nodes stop moving when the mouse stops
-            // self.wayland_state.mouse_x_delta = 0;
-            // self.wayland_state.mouse_y_delta = 0;
-            //
-            // // Handle Keyboard Input (Applying small deltas for continuous polling)
-            // const move_speed = 3.0; // Adjusted for per-frame polling
-            // const zoom_speed = 0.0003;
-            //
-            // if (self.wayland_state.key_w) self.camera_pos[1] -= move_speed * self.scale;
-            // if (self.wayland_state.key_s) self.camera_pos[1] += move_speed * self.scale;
-            // if (self.wayland_state.key_a) self.camera_pos[0] -= move_speed * self.scale;
-            // if (self.wayland_state.key_d) self.camera_pos[0] += move_speed * self.scale;
-            //
-            // // Note: You might want a cooldown/debounce on Q/E so it doesn't zoom infinitely fast
-            // if (self.wayland_state.key_q) self.scale -= zoom_speed;
-            // if (self.wayland_state.key_e) self.scale += zoom_speed;
+            if (needs_state_update) {
+                needs_state_update = false;
 
-            if (needs_render and self.wayland_handle.state.frame_ready) {
-                std.log.debug("Rendering...", .{});
+                if (self.wayland_handle.state.input.scroll_y != 0) {
+                    const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                    const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+
+                    const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.05);
+
+                    // Track where the mouse is in the world BEFORE scaling
+                    const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
+                    const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
+
+                    self.scale *= zoom_factor;
+                    self.scale = std.math.clamp(self.scale, 0.05, 5.0);
+
+                    // Track where the mouse is in the world AFTER scaling
+                    const world_x_after = (mouse_x / self.scale) + self.camera_pos[0];
+                    const world_y_after = (mouse_y / self.scale) + self.camera_pos[1];
+
+                    // Pan the camera so the mouse stays over the exact same world coordinate
+                    self.camera_pos[0] += (world_x_before - world_x_after);
+                    self.camera_pos[1] += (world_y_before - world_y_after);
+
+                    self.wayland_handle.state.input.scroll_y = 0;
+                    needs_render = true;
+                }
+
+                if (self.wayland_handle.state.input.mouse_down_r) {
+                    self.camera_pos[0] -= self.wayland_handle.state.input.mouse_dx / self.scale;
+                    self.camera_pos[1] -= self.wayland_handle.state.input.mouse_dy / self.scale;
+                    needs_render = true;
+                }
+
+                if (self.wayland_handle.state.input.mouse_down_l) {
+                    const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                    const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                    const world_x = (mouse_x / self.scale) + self.camera_pos[0];
+                    const world_y = (mouse_y / self.scale) + self.camera_pos[1];
+
+                    if (self.selected_node) |node_id| {
+                        if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
+                            node.x.? += self.wayland_handle.state.input.mouse_dx / self.scale;
+                            node.y.? += self.wayland_handle.state.input.mouse_dy / self.scale;
+                            needs_render = true;
+                        }
+                    } else {
+                        var it = self.pipewire_handle.nodes.iterator();
+                        while (it.next()) |entry| {
+                            const n = entry.value_ptr;
+                            if (n.x) |nx| {
+                                if (n.y) |ny| {
+                                    const w = types.PipewireNode.W_NODE;
+                                    const h = n.computeNodeHeight();
+                                    if (world_x >= nx and world_x <= nx + w and
+                                        world_y >= ny and world_y <= ny + h)
+                                    {
+                                        self.selected_node = entry.key_ptr.*;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Let go of the node on release
+                    self.selected_node = null;
+                }
+
+                // Reset frame deltas so they don't repeatedly apply
+                self.wayland_handle.state.input.mouse_dx = 0;
+                self.wayland_handle.state.input.mouse_dy = 0;
+            }
+
+            const can_render = needs_render and self.wayland_handle.state.frame_ready;
+
+            if (can_render) {
                 needs_render = false;
 
                 // If window resized, we must recreate the swapchain
@@ -473,6 +532,7 @@ pub const App = struct {
                         // Is when the image is safe to draw to, can be either a semaphore or a fence. Note we return
                         // BEFORE the semaphore is signaled! So it must be checked.
                         self.image_availible_semaphore[current_frame],
+
                         // This would be the fence, but we are using a semaphore
                         null,
                         &image_index,
@@ -494,6 +554,7 @@ pub const App = struct {
                         &self.in_flight_fences[current_frame],
                     ),
                 );
+                gpu_frame_ready[current_frame] = false;
 
                 // Update uniforms buffers
                 {
@@ -510,11 +571,17 @@ pub const App = struct {
                 var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
                 defer quad_vertices.deinit(self.allocator);
                 {
-                    for (self.nodes) |node| {
-                        try node.appendVerticesNode(self.allocator, &quad_vertices);
+                    {
+                        var node_it = self.pipewire_handle.nodes.iterator();
+                        while (node_it.next()) |node| {
+                            try node.value_ptr.appendVerticesNode(self.allocator, &quad_vertices);
+                        }
                     }
-                    for (self.nodes) |node| {
-                        try node.appendVerticesPins(self.allocator, &quad_vertices);
+                    {
+                        var node_it = self.pipewire_handle.nodes.iterator();
+                        while (node_it.next()) |node| {
+                            try node.value_ptr.appendVerticesPorts(self.allocator, &quad_vertices);
+                        }
                     }
 
                     // TODO: this is ugly as sin, and its because our use of anyopque
@@ -528,8 +595,9 @@ pub const App = struct {
                 var bezier_vertices = try std.ArrayList(types.BezierVertex).initCapacity(self.allocator, 0);
                 defer bezier_vertices.deinit(self.allocator);
                 {
-                    for (self.nodes) |node| {
-                        try node.appendVerticesBezier(self.allocator, self.nodes, &bezier_vertices);
+                    var node_it = self.pipewire_handle.nodes.iterator();
+                    while (node_it.next()) |node| {
+                        try node.value_ptr.appendVerticesLinks(self.allocator, self.pipewire_handle.nodes, &bezier_vertices);
                     }
 
                     if (bezier_vertices.items.len > 0) {
@@ -543,8 +611,9 @@ pub const App = struct {
                 var text_vertices = try std.ArrayList(types.TextVertex).initCapacity(self.allocator, 0);
                 defer text_vertices.deinit(self.allocator);
                 {
-                    for (self.nodes) |node| {
-                        try node.appendAllText(self.allocator, self.font_atlas, &text_vertices);
+                    var node_it = self.pipewire_handle.nodes.iterator();
+                    while (node_it.next()) |node| {
+                        try node.value_ptr.appendVerticesText(self.allocator, self.font_atlas, &text_vertices);
                     }
 
                     const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(self.text_vertex_buffer_set.vkBuffersMapped[current_frame]));
@@ -729,8 +798,6 @@ pub const App = struct {
 
     pub fn deinit(self: *App) void {
         defer self.wayland_handle.deinit();
-        defer self.pw_manager.deinit();
-        defer self.frame_arena.deinit();
         defer self.ring.deinit();
         defer util.deinitVkInstance(self.instance);
         defer util.deinitVkSurface(self.instance, self.surface);
