@@ -307,9 +307,7 @@ pub fn deinitVkSurface(
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
 ) void {
-    _ = instance;
-    _ = surface;
-
+    c.vkDestroySurfaceKHR(instance, surface, null);
     defer std.log.info("Deinit vulkan surface OK", .{});
 }
 
@@ -592,6 +590,51 @@ pub fn getPreferredVkSurfaceFormat(
     defer std.log.debug("Trying to get preferred surface format OK", .{});
 
     return surface_format;
+}
+
+// =VkDepthFormat======================================================================================================
+pub fn findDepthFormat(physical_device: c.VkPhysicalDevice) !c.VkFormat {
+    const candidates = [_]c.VkFormat{
+        c.VK_FORMAT_D32_SFLOAT,
+        c.VK_FORMAT_D32_SFLOAT_S8_UINT,
+        c.VK_FORMAT_D24_UNORM_S8_UINT,
+    };
+
+    for (candidates) |format| {
+        var props: c.VkFormatProperties = undefined;
+        c.vkGetPhysicalDeviceFormatProperties(physical_device, format, &props);
+
+        if ((props.optimalTilingFeatures & c.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+            return format;
+        }
+    }
+    return error.VkErrorNoSupportedDepthFormat;
+}
+
+pub fn initDepthImageView(device: c.VkDevice, image: c.VkImage, format: c.VkFormat) !c.VkImageView {
+    var view: c.VkImageView = undefined;
+    try handleError(c.vkCreateImageView(device, &c.VkImageViewCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+        .image = image,
+        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components = .{
+            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, // <-- Crucial
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    }, null, &view));
+    return view;
 }
 
 // =VkPresentMode======================================================================================================
@@ -1231,6 +1274,7 @@ pub fn deinitVkShaderModule(
 pub fn initVkRenderPass(
     device: c.VkDevice,
     surface_format: c.VkSurfaceFormatKHR,
+    depth_format: c.VkFormat,
 ) !c.VkRenderPass {
     var render_pass: c.VkRenderPass = undefined;
 
@@ -1242,7 +1286,7 @@ pub fn initVkRenderPass(
             .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .attachmentCount = 1,
+            .attachmentCount = 2,
             // Canvassas we will draw on. One can have mutliple in the case of e.g. a depth buffer, deferred
             // rendering, multi-sample anti-aliasing, or post processing like bloom.
             .pAttachments = &[_]c.VkAttachmentDescription{
@@ -1264,6 +1308,24 @@ pub fn initVkRenderPass(
                     // The layout how it should be at the end, in this case presenting
                     .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 },
+                c.VkAttachmentDescription{
+                    .flags = 0,
+                    // Forward the format
+                    .format = depth_format,
+                    // Number of samples to write, multiple samples used e.g. for anti-aliasing
+                    .samples = c.VK_SAMPLE_COUNT_1_BIT,
+                    // What to do BEFORE we start drawing
+                    .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    // What to do AFTER we finish drawing
+                    .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    // Stencil buffer behaviour
+                    .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                    .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    // The layout how it starts, in this case we say we don't care
+                    .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+                    // The layout how it should be at the end, in this case presenting
+                    .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                },
             },
             .subpassCount = 1,
             // GPU can do multiple passes, they are specified here
@@ -1283,7 +1345,10 @@ pub fn initVkRenderPass(
                     },
                     // How to resolve e.g. 4 samples down to 1 (e.g. MSAA)
                     .pResolveAttachments = null,
-                    .pDepthStencilAttachment = null,
+                    .pDepthStencilAttachment = &c.VkAttachmentReference{
+                        .attachment = 1,
+                        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    },
                     .preserveAttachmentCount = 0,
                     // Attachments that the current subpass is not using, but may be used by other subpasses, thus need
                     // be preserved.
@@ -1297,8 +1362,8 @@ pub fn initVkRenderPass(
                 .dstSubpass = 0,
                 .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                 .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .srcAccessMask = 0,
+                .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 .dependencyFlags = 0,
             },
         }, null, &render_pass),
@@ -1519,8 +1584,8 @@ pub fn initQuadVertexVkGraphicsPipeline(
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .depthTestEnable = c.VK_FALSE,
-                .depthWriteEnable = c.VK_FALSE,
+                .depthTestEnable = c.VK_TRUE,
+                .depthWriteEnable = c.VK_TRUE,
                 .depthCompareOp = c.VK_COMPARE_OP_LESS,
                 .depthBoundsTestEnable = c.VK_FALSE,
                 .stencilTestEnable = c.VK_FALSE,
@@ -1679,8 +1744,8 @@ pub fn initBezierVertexVkGraphicsPipeline(
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .depthTestEnable = c.VK_FALSE,
-                .depthWriteEnable = c.VK_FALSE,
+                .depthTestEnable = c.VK_TRUE,
+                .depthWriteEnable = c.VK_TRUE,
                 .depthCompareOp = c.VK_COMPARE_OP_LESS,
                 .depthBoundsTestEnable = c.VK_FALSE,
                 .stencilTestEnable = c.VK_FALSE,
@@ -1835,8 +1900,8 @@ pub fn initTextVertexVkGraphicsPipeline(
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .depthTestEnable = c.VK_FALSE,
-                .depthWriteEnable = c.VK_FALSE,
+                .depthTestEnable = c.VK_TRUE,
+                .depthWriteEnable = c.VK_TRUE,
                 .depthCompareOp = c.VK_COMPARE_OP_LESS,
                 .depthBoundsTestEnable = c.VK_FALSE,
                 .stencilTestEnable = c.VK_FALSE,
@@ -1902,6 +1967,7 @@ pub fn initFramebuffers(
     allocator: std.mem.Allocator,
     device: c.VkDevice,
     image_views: []c.VkImageView,
+    depth_views: []c.VkImageView,
     render_pass: c.VkRenderPass,
     swapchain_extent: c.VkExtent2D,
 ) ![]c.VkFramebuffer {
@@ -1918,9 +1984,10 @@ pub fn initFramebuffers(
                 .pNext = null,
                 .flags = 0,
                 .renderPass = render_pass,
-                .attachmentCount = 1,
+                .attachmentCount = 2,
                 .pAttachments = &[_]c.VkImageView{
                     image_views[i],
+                    depth_views[i],
                 },
                 .width = swapchain_extent.width,
                 .height = swapchain_extent.height,

@@ -7,6 +7,7 @@ struct FragmentInput {
     [[vk::location(4)]] float4 color_beg;
     [[vk::location(5)]] float4 color_end;
     [[vk::location(6)]] float thickness;
+    [[vk::location(7)]] float is_selected;
 };
 
 // Evaluate Cubic Bezier at t
@@ -30,11 +31,13 @@ float2 get_bezier_derivative(float t, float2 p0, float2 p1, float2 p2, float2 p3
 float4 main(FragmentInput input) : SV_Target {
     float2 pixel_pos = input.position.xy;
     
-    // 1. Initial guess for t (project pixel onto the P0-P3 line)
+    // Initial guess for t 
     float t = 0.5; 
+
     
-    // 2. Newton-Raphson iterations to find the closest point on curve
-    for (int i = 0; i < 8; i++) {
+    // Newton-Raphson iterations to find the closest point on curve
+    uint num_iter = 8;
+    for (int i = 0; i < num_iter; i++) {
         float2 point = get_bezier_point(t, input.p0, input.p1, input.p2, input.p3);
         float2 deriv = get_bezier_derivative(t, input.p0, input.p1, input.p2, input.p3);
         
@@ -44,16 +47,20 @@ float4 main(FragmentInput input) : SV_Target {
         t = clamp(t, 0.0, 1.0);
     }
 
-    // 3. Distance calculation
+    // Distance calculation
     float2 closest = get_bezier_point(t, input.p0, input.p1, input.p2, input.p3);
     float dist = length(pixel_pos - closest);
     
-    // 4. Anti-aliasing
+    // Anti-aliasing
     float aa_width = 1.5;
     float alpha = 1.0 - smoothstep(input.thickness - aa_width, input.thickness, dist);
-    
     if (alpha <= 0.0) discard;
 
+    // Determine the color of the bezier
     float4 base_color = lerp(input.color_beg, input.color_end, t);
+    if (input.is_selected > 0.5) {
+        base_color.rgb = 1.0 - base_color.rgb;
+    }
+
     return float4(base_color.rgb, base_color.a * alpha);
 }

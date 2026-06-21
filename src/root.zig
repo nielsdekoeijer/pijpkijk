@@ -6,7 +6,6 @@ const util = @import("util.zig");
 const wayland = @import("wayland.zig");
 const pipewire = @import("pipewire.zig");
 const types = @import("types.zig");
-const graph = @import("graph.zig");
 
 pub const FRAMES_IN_FLIGHT = 3;
 
@@ -32,6 +31,9 @@ pub const App = struct {
     swapchain: c.VkSwapchainKHR,
     images: []c.VkImage,
     image_views: []c.VkImageView,
+    depth_format: c.VkFormat,
+    depth_images: []util.Image,
+    depth_image_views: []c.VkImageView,
     quad_vert_shader: c.VkShaderModule,
     quad_frag_shader: c.VkShaderModule,
     bezier_vert_shader: c.VkShaderModule,
@@ -65,7 +67,6 @@ pub const App = struct {
     ring: std.os.linux.IoUring,
 
     // TEMP
-    nodes: []types.Node,
     camera_pos: [2]f32,
     scale: f32,
     selected_node: ?usize,
@@ -104,8 +105,7 @@ pub const App = struct {
         }
 
         // =InitializePipewire=========================================================================================
-        self.pipewire_handle = try allocator.create(pipewire.PipewireHandle);
-        try pipewire.PipewireHandle.init(self.pipewire_handle, self.allocator);
+        self.pipewire_handle = try pipewire.PipewireHandle.init(self.allocator);
 
         // =AqcuireVkInstance==========================================================================================
         self.instance = try util.initVkInstance(allocator);
@@ -161,6 +161,24 @@ pub const App = struct {
         self.image_views = try util.initVkImageViews(allocator, self.device, self.images, self.surface_format);
         errdefer util.deinitVkImageViews(allocator, self.device, self.image_views);
 
+        self.depth_format = try util.findDepthFormat(self.physical_device);
+        self.depth_images = try allocator.alloc(util.Image, self.images.len);
+        self.depth_image_views = try allocator.alloc(c.VkImageView, self.images.len);
+
+        for (0..self.images.len) |i| {
+            self.depth_images[i] = try util.initImage(
+                self.device,
+                self.physical_device,
+                self.swap_extent.height,
+                self.swap_extent.width,
+                self.depth_format,
+                c.VK_IMAGE_TILING_OPTIMAL,
+                c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            );
+            self.depth_image_views[i] = try util.initDepthImageView(self.device, self.depth_images[i].image, self.depth_format);
+        }
+
         // =Shaders====================================================================================================
         self.quad_vert_shader = try util.initVkShaderModule("./shaders/quad.vert.spirv", self.device);
         errdefer util.deinitVkShaderModule(self.device, self.quad_vert_shader);
@@ -181,7 +199,7 @@ pub const App = struct {
         errdefer util.deinitVkShaderModule(self.device, self.text_frag_shader);
 
         // =RenderPass=================================================================================================
-        self.render_pass = try util.initVkRenderPass(self.device, self.surface_format);
+        self.render_pass = try util.initVkRenderPass(self.device, self.surface_format, self.depth_format);
         errdefer util.deinitVkRenderPass(self.device, self.render_pass);
 
         // =Pipeline===================================================================================================
@@ -223,6 +241,7 @@ pub const App = struct {
             allocator,
             self.device,
             self.image_views,
+            self.depth_image_views,
             self.render_pass,
             self.swap_extent,
         );
@@ -382,49 +401,59 @@ pub const App = struct {
             for (cqes[0..cqe_count]) |cqe| {
                 const user_data: UserData = @enumFromInt(cqe.user_data);
                 // std.log.debug("Received io_uring event: '{s}'", .{@tagName(user_data)});
+
                 switch (user_data) {
                     UserData.PIPEWIRE => {
+                        // If no error...
+                        if (cqe.res >= 0) {
+                            const revents = @as(u32, @bitCast(cqe.res));
+
+                            // Check if poll input...
+                            if ((revents & std.posix.POLL.IN) != 0) {
+                                try self.pipewire_handle.drain();
+                                try self.pipewire_handle.update_graph_metadata();
+                                needs_state_update = true;
+                            }
+                        }
+
+                        // Reschedule
+                        _ = try self.ring.poll_add(@intFromEnum(UserData.PIPEWIRE), pw_fd, std.posix.POLL.IN);
+                    },
+
+                    UserData.WAYLAND => {
+                        // If no error...
                         if (cqe.res >= 0) {
                             const revents = @as(u32, @bitCast(cqe.res));
 
                             if ((revents & std.posix.POLL.IN) != 0) {
                                 try handleError(
-                                    c.pw_loop_iterate(self.pipewire_handle.loop, 0),
+                                    c.wl_display_dispatch(self.wayland_handle.core.display),
                                 );
-                            }
-                        }
-
-                        try self.pipewire_handle.update_graph_metadata();
-
-                        needs_state_update = true;
-
-                        _ = try self.ring.poll_add(@intFromEnum(UserData.PIPEWIRE), pw_fd, std.posix.POLL.IN);
-                    },
-                    UserData.WAYLAND => {
-                        if (cqe.res >= 0) {
-                            const revents = @as(u32, @bitCast(cqe.res));
-
-                            if ((revents & std.posix.POLL.IN) != 0) {
-                                _ = c.wl_display_dispatch(self.wayland_handle.core.display);
 
                                 needs_render = true;
+                                needs_state_update = true;
                             }
                         }
 
-                        needs_state_update = true;
-
+                        // Reschedule
                         _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
                     },
                 }
             }
 
-            _ = try self.ring.submit();
-            _ = c.wl_display_flush(self.wayland_handle.core.display);
+            {
+                _ = try self.ring.submit();
+                try handleError(
+                    c.wl_display_flush(self.wayland_handle.core.display),
+                );
+            }
 
+            // Check if we should shut down
             if (self.wayland_handle.state.should_close) {
                 running = false;
             }
 
+            // Update program state based on e.g. inputs
             if (needs_state_update) {
                 needs_state_update = false;
 
@@ -474,6 +503,11 @@ pub const App = struct {
                     } else {
                         var it = self.pipewire_handle.nodes.iterator();
                         while (it.next()) |entry| {
+                            try entry.value_ptr.markNearbyLinks(
+                                self.pipewire_handle.nodes,
+                                [_]f32{ world_x, world_y },
+                            );
+
                             const n = entry.value_ptr;
                             if (n.x) |nx| {
                                 if (n.y) |ny| {
@@ -494,15 +528,47 @@ pub const App = struct {
                     self.selected_node = null;
                 }
 
+                if (self.wayland_handle.state.input.key_q) |key_q| {
+                    if (key_q == .PRESSED) {
+                        running = false;
+                    }
+                }
+
+                if (self.wayland_handle.state.input.key_r) |key_r| {
+                    if (key_r == .PRESSED) {
+                        try self.pipewire_handle.update_graph_metadata();
+                    }
+                }
+
+                if (self.wayland_handle.state.input.key_escape) |key_escape| {
+                    if (key_escape == .PRESSED) {
+                        var node_it = self.pipewire_handle.nodes.iterator();
+                        while (node_it.next()) |*node| {
+                            var port_it = node.value_ptr.outs.iterator();
+                            while (port_it.next()) |*port| {
+                                var link_it = port.value_ptr.connections.iterator();
+                                while (link_it.next()) |*link| {
+                                    link.value_ptr.is_selected = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Reset frame deltas so they don't repeatedly apply
                 self.wayland_handle.state.input.mouse_dx = 0;
                 self.wayland_handle.state.input.mouse_dy = 0;
             }
 
-            const can_render = needs_render and self.wayland_handle.state.frame_ready;
-
-            if (can_render) {
+            // Do a render if required
+            if (needs_render and self.wayland_handle.state.frame_ready) {
                 needs_render = false;
+
+                if (self.swap_extent.width != self.wayland_handle.state.width or
+                    self.swap_extent.height != self.wayland_handle.state.height)
+                {
+                    window_resized = true;
+                }
 
                 // If window resized, we must recreate the swapchain
                 if (window_resized) {
@@ -559,9 +625,14 @@ pub const App = struct {
                 // Update uniforms buffers
                 {
                     // TODO: this is ugly as sin, and its because our use of anyopque
-                    const uniform_map: [*]types.Uniform = @ptrCast(@alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]));
+                    const uniform_map: [*]types.Uniform = @ptrCast(
+                        @alignCast(self.uniform_buffer_set.vkUniformBuffersMapped[current_frame]),
+                    );
                     uniform_map[0] = .{
-                        .screen_size = .{ @floatFromInt(self.swap_extent.width), @floatFromInt(self.swap_extent.height) },
+                        .screen_size = .{
+                            @floatFromInt(self.swap_extent.width),
+                            @floatFromInt(self.swap_extent.height),
+                        },
                         .camera_pos = self.camera_pos,
                         .scale = self.scale,
                     };
@@ -586,7 +657,9 @@ pub const App = struct {
 
                     // TODO: this is ugly as sin, and its because our use of anyopque
                     if (quad_vertices.items.len > 0) {
-                        const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(self.quad_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                        const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(
+                            self.quad_vertex_buffer_set.vkBuffersMapped[current_frame],
+                        ));
                         @memcpy(quad_vert_map[0..quad_vertices.items.len], quad_vertices.items);
                     }
                 }
@@ -597,12 +670,18 @@ pub const App = struct {
                 {
                     var node_it = self.pipewire_handle.nodes.iterator();
                     while (node_it.next()) |node| {
-                        try node.value_ptr.appendVerticesLinks(self.allocator, self.pipewire_handle.nodes, &bezier_vertices);
+                        try node.value_ptr.appendVerticesLinks(
+                            self.allocator,
+                            self.pipewire_handle.nodes,
+                            &bezier_vertices,
+                        );
                     }
 
                     if (bezier_vertices.items.len > 0) {
                         // TODO: this is ugly as sin, and its because our use of anyopque
-                        const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                        const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(
+                            self.bezier_vertex_buffer_set.vkBuffersMapped[current_frame],
+                        ));
                         @memcpy(bezier_vert_map[0..bezier_vertices.items.len], bezier_vertices.items);
                     }
                 }
@@ -616,7 +695,9 @@ pub const App = struct {
                         try node.value_ptr.appendVerticesText(self.allocator, self.font_atlas, &text_vertices);
                     }
 
-                    const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(self.text_vertex_buffer_set.vkBuffersMapped[current_frame]));
+                    const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(
+                        self.text_vertex_buffer_set.vkBuffersMapped[current_frame],
+                    ));
                     @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
                 }
 
@@ -631,9 +712,10 @@ pub const App = struct {
                     .renderPass = self.render_pass,
                     .framebuffer = self.framebuffers[image_index],
                     .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_extent },
-                    .clearValueCount = 1,
-                    .pClearValues = &c.VkClearValue{
-                        .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } },
+                    .clearValueCount = 2,
+                    .pClearValues = &[_]c.VkClearValue{
+                        .{ .color = .{ .float32 = .{ 0.1, 0.1, 0.1, 1.0 } } },
+                        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
                     },
                 }, c.VK_SUBPASS_CONTENTS_INLINE);
 
@@ -770,6 +852,11 @@ pub const App = struct {
         // Delete what we had
         util.deinitVkSemaphores(self.allocator, self.device, self.render_finished_semaphore);
         util.deinitFramebuffers(self.allocator, self.device, self.framebuffers);
+        util.deinitVkImageViews(self.allocator, self.device, self.depth_image_views);
+        for (self.depth_images) |img| {
+            util.deinitTextureImage(self.device, img.image, img.image_memory);
+        }
+        self.allocator.free(self.depth_images);
         util.deinitVkImageViews(self.allocator, self.device, self.image_views);
         util.deinitVkImages(self.allocator, self.images);
         util.deinitVkSwapchain(self.device, self.swapchain);
@@ -786,18 +873,47 @@ pub const App = struct {
             self.present_mode,
             self.graphics_queue_index,
             self.present_queue_index,
-            self.swapchain,
+            // self.swapchain,
+            null,
         );
         self.images = try util.initVkImages(self.allocator, self.device, self.swapchain);
         self.image_views = try util.initVkImageViews(self.allocator, self.device, self.images, self.surface_format);
-        self.framebuffers = try util.initFramebuffers(self.allocator, self.device, self.image_views, self.render_pass, self.swap_extent);
+
+        self.depth_images = try self.allocator.alloc(util.Image, self.images.len);
+        self.depth_image_views = try self.allocator.alloc(c.VkImageView, self.images.len);
+        for (0..self.images.len) |i| {
+            self.depth_images[i] = try util.initImage(
+                self.device,
+                self.physical_device,
+                self.swap_extent.height,
+                self.swap_extent.width,
+                self.depth_format,
+                c.VK_IMAGE_TILING_OPTIMAL,
+                c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            );
+            self.depth_image_views[i] = try util.initDepthImageView(self.device, self.depth_images[i].image, self.depth_format);
+        }
+
+        self.framebuffers = try util.initFramebuffers(
+            self.allocator,
+            self.device,
+            self.image_views,
+            self.depth_image_views,
+            self.render_pass,
+            self.swap_extent,
+        );
+
         self.render_finished_semaphore = try util.initVkSemaphores(self.allocator, self.device, self.images.len);
 
         defer std.log.info("Recreating swapchain OK", .{});
     }
 
     pub fn deinit(self: *App) void {
+        defer self.allocator.destroy(self.wayland_handle);
         defer self.wayland_handle.deinit();
+        defer self.allocator.destroy(self.pipewire_handle);
+        defer self.pipewire_handle.deinit();
         defer self.ring.deinit();
         defer util.deinitVkInstance(self.instance);
         defer util.deinitVkSurface(self.instance, self.surface);
@@ -832,7 +948,13 @@ pub const App = struct {
         defer util.deinitTextureImage(self.device, self.font_texture_image.image, self.font_texture_image.image_memory);
         defer util.deinitVkImageViews(self.allocator, self.device, self.font_texture_view);
         defer util.deinitTextureSampler(self.device, self.font_sampler);
+        defer {
+            util.deinitVkImageViews(self.allocator, self.device, self.depth_image_views);
+            for (self.depth_images) |img| {
+                util.deinitTextureImage(self.device, img.image, img.image_memory);
+            }
+            self.allocator.free(self.depth_images);
+        }
         defer self.font_atlas.deinit();
-        defer self.allocator.free(self.nodes);
     }
 };

@@ -13,9 +13,12 @@ fn ValidReturnType(comptime ErrorType: type) type {
     }
 }
 
+/// Generic error handler, mapping from c to zig error
 pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
-    switch (@TypeOf(err)) {
-        inline bool => if (err == false) return error.CError,
+    const err_type = @TypeOf(err);
+    const err_typeinfo = @typeInfo(err_type);
+    switch (err_type) {
+        // NOTE: flaw here, VkResult is just c_int, so this here is retarded
         inline c.VkResult => {
             if (err >= c.VK_SUCCESS) {
                 return;
@@ -23,7 +26,9 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
                 return error.CError;
             }
         },
-        inline else => switch (@typeInfo(@TypeOf(err))) {
+
+        // For generic types (e.g. pointers, optionals)
+        inline else => switch (err_typeinfo) {
             inline .optional => {
                 if (err) |unwrapped| {
                     return unwrapped;
@@ -31,6 +36,7 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
                     return error.CError;
                 }
             },
+
             inline .pointer => |ptr_info| {
                 _ = ptr_info;
                 if (err == null) {
@@ -38,7 +44,10 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
                 }
                 return err;
             },
-            inline else => unreachable,
+
+            inline else => {
+                comptime unreachable;
+            },
         },
     }
 }

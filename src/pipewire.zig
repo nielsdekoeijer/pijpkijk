@@ -3,16 +3,17 @@ const c = @import("c.zig").c;
 const types = @import("types.zig");
 const handleError = @import("error.zig").handleError;
 
-// =Pipewire===========================================================================================================
+/// A handle for interacting with pipewire
 pub const PipewireHandle = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.AutoArrayHashMapUnmanaged(u32, types.PipewireNode) = .empty,
     loop: *c.pw_loop = undefined,
     context: *c.pw_context = undefined,
     core: *c.pw_core = undefined,
     registry: *c.pw_registry = undefined,
     registry_listener: c.spa_hook = undefined,
-    allocator: std.mem.Allocator,
-    nodes: std.AutoHashMapUnmanaged(u32, types.PipewireNode) = .empty,
 
+    /// Registry of functions that should fire based on pipewire events
     const GlobalRegistry = struct {
         fn onGlobal(
             data: ?*anyopaque,
@@ -178,8 +179,14 @@ pub const PipewireHandle = struct {
                 } else {
                     name_found = try self.allocator.dupe(u8, "Unknown Node");
                 }
+                errdefer self.allocator.free(name_found);
 
                 std.log.debug("PipewireHandle creating new node '{s}'", .{name_found});
+
+                if (self.nodes.getPtr(id)) |existing_node| {
+                    std.log.debug("Overwriting existing node with name '{s}'", .{existing_node.name});
+                    existing_node.deinit(self.allocator);
+                }
 
                 try self.nodes.put(self.allocator, id, .{
                     .node_id = id,
@@ -287,9 +294,18 @@ pub const PipewireHandle = struct {
             data: ?*anyopaque,
             id: u32,
         ) callconv(.c) void {
-            // std.log.debug("PipewireHandle global remove called", .{});
-            _ = data;
-            _ = id;
+            const self: *PipewireHandle = @ptrCast(@alignCast(data));
+
+            if (self.nodes.contains(id)) {
+                std.log.debug("Removing node {d}", .{id});
+            } else {
+                std.log.warn("Attempted to remove node {d} which doesn't exist", .{id});
+            }
+
+            if (self.nodes.fetchOrderedRemove(id)) |entry| {
+                var node = entry.value;
+                node.deinit(self.allocator);
+            }
         }
 
         const registry = c.pw_registry_events{
@@ -300,7 +316,7 @@ pub const PipewireHandle = struct {
     };
 
     /// Reconsider the graph as presented by the nodes hashmap, and determine appropriate coordinates based on
-    /// underlying connections.
+    /// underlying connections. This method updates the `self.nodes` field to be up to date.
     ///
     /// For plotting left to right, I have decided to place all unconnected nodes first. Then, I place all inputs.
     /// Then, I aim to plot all remaining nodes PREVENTING any feedback paths. This essentially amounts to drawing a
@@ -310,9 +326,7 @@ pub const PipewireHandle = struct {
         var completed: std.AutoHashMapUnmanaged(u32, void) = .empty;
         defer completed.deinit(self.allocator);
 
-        var x_current: f32 = 0;
-        var y_current: f32 = 0;
-
+        // Ensure all nodes have a port color associated with them
         {
             var node_it = self.nodes.iterator();
             while (node_it.next()) |*node| {
@@ -320,6 +334,10 @@ pub const PipewireHandle = struct {
             }
         }
 
+        var x_current: f32 = 0;
+        var y_current: f32 = 0;
+
+        // First pass: draw the nodes that have NO connections in the first column
         {
             var node_it = self.nodes.iterator();
             while (node_it.next()) |*node| {
@@ -330,19 +348,23 @@ pub const PipewireHandle = struct {
                 var inp_count: usize = 0;
                 var inp_it = node.value_ptr.inps.iterator();
                 while (inp_it.next()) |*inp| {
-                    inp_count += inp.value_ptr.connections.size;
+                    inp_count += inp.value_ptr.connections.count();
                 }
 
                 var out_count: usize = 0;
                 var out_it = node.value_ptr.outs.iterator();
                 while (out_it.next()) |*out| {
-                    out_count += out.value_ptr.connections.size;
+                    out_count += out.value_ptr.connections.count();
                 }
 
                 if (inp_count == 0 and out_count == 0) {
                     node.value_ptr.x = x_current;
-
                     node.value_ptr.y = y_current;
+
+                    // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
+                    // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
+                    // rely implicitly on the order of the nodes! Bad and dumb, but we do it this way.
+                    node.value_ptr.z = @floatFromInt(99999 - node.value_ptr.node_id);
                     y_current += node.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
 
                     try completed.put(self.allocator, node.value_ptr.node_id, {});
@@ -350,70 +372,136 @@ pub const PipewireHandle = struct {
             }
         }
 
-        x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
-        y_current = 0;
-
+        // Second pass: draw the rest of the nodes
         {
-            var to_be_completed: std.ArrayListUnmanaged(u32) = .empty;
-            defer to_be_completed.deinit(self.allocator);
+            // Keep going until all nodes placed OR we find a cyclical dependency. In that case we just return
+            while (completed.count() != self.nodes.count()) {
+                // Next column...
+                x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
+                y_current = 0;
 
-            while (completed.size != self.nodes.size) {
-                const completed_start_size = completed.size;
+                // In order to properly place our nodes, we keep track of some metadata
+                const NodeInfo = struct { id: u32, center_of_mass: f32 };
 
+                // Dynamic array that tracks metadata
+                // TODO: dynamic = shit --> can improve
+                var to_be_completed: std.ArrayListUnmanaged(NodeInfo) = .empty;
+                defer to_be_completed.deinit(self.allocator);
+
+                // Number of nodes we had drawn at the start
+                const completed_start_size = completed.count();
+
+                // For each node...
                 var node_it = self.nodes.iterator();
                 while (node_it.next()) |*node| {
+                    // If node already placed, we skip
                     if (completed.contains(node.value_ptr.node_id)) {
                         continue;
                     }
 
-                    var all_deps_met = true;
-                    var inp_it = node.value_ptr.inps.iterator();
-                    inp_loop: while (inp_it.next()) |*inp| {
-                        var conn_it = inp.value_ptr.connections.iterator();
-                        while (conn_it.next()) |*conn| {
-                            if (!completed.contains(conn.value_ptr.node_id)) {
-                                all_deps_met = false;
-                                break :inp_loop;
+                    // We only place node if all its dependencies are already placed
+                    var all_inputs_placed = true;
+                    {
+                        var inp_it = node.value_ptr.inps.iterator();
+                        inp_loop: while (inp_it.next()) |*inp| {
+                            var conn_it = inp.value_ptr.connections.iterator();
+                            while (conn_it.next()) |*conn| {
+                                if (!completed.contains(conn.value_ptr.node_id)) {
+                                    all_inputs_placed = false;
+                                    break :inp_loop;
+                                }
                             }
                         }
                     }
 
-                    if (all_deps_met) {
-                        node.value_ptr.x = x_current;
+                    // If all inputs are placed, we schedule a node to be added
+                    if (all_inputs_placed) {
+                        var locs = try std.ArrayListUnmanaged(f32).initCapacity(self.allocator, 0);
+                        defer locs.deinit(self.allocator);
 
-                        node.value_ptr.y = y_current;
-                        y_current += node.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
+                        // Approximate median wire position and use it as "center of mass" to place the node
+                        var center_of_mass: f32 = 0.0;
+                        {
+                            {
+                                var inp_it = node.value_ptr.inps.iterator();
+                                while (inp_it.next()) |*inp| {
+                                    var conn_it = inp.value_ptr.connections.iterator();
+                                    while (conn_it.next()) |*conn| {
+                                        try locs.append(self.allocator, self.nodes.get(conn.value_ptr.node_id).?.y.?);
+                                    }
+                                }
+                            }
 
-                        try to_be_completed.append(self.allocator, node.value_ptr.node_id);
+                            std.mem.sort(f32, locs.items, {}, std.sort.asc(f32));
+
+                            if (locs.items.len > 0) {
+                                std.log.debug("Computed: {}", .{center_of_mass});
+                                std.mem.sort(f32, locs.items, {}, std.sort.asc(f32));
+                                center_of_mass = locs.items[locs.items.len / 2];
+                            }
+                        }
+
+                        try to_be_completed.append(self.allocator, .{
+                            .id = node.value_ptr.node_id,
+                            .center_of_mass = center_of_mass,
+                        });
                     }
                 }
 
+                // Draw nodes in order of center of mass, this reduces the distance between connections
+                std.mem.sort(
+                    NodeInfo,
+                    to_be_completed.items,
+                    {},
+                    struct {
+                        pub fn lessThanFn(_: void, lhs: NodeInfo, rhs: NodeInfo) bool {
+                            return lhs.center_of_mass < rhs.center_of_mass;
+                        }
+                    }.lessThanFn,
+                );
+
                 for (to_be_completed.items) |item| {
-                    try completed.put(self.allocator, item, {});
+                    const node = self.nodes.getPtr(item.id).?;
+                    node.x = x_current;
+                    node.y = y_current;
+
+                    // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
+                    // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
+                    // rely implicitly on the order of the nodes! Bad and dumb, but we do it this way.
+                    node.z = @floatFromInt(99999 - node.node_id);
+                    y_current += node.computeNodeHeight() + types.H_NODE_SPACING;
+
+                    try completed.put(self.allocator, item.id, {});
                 }
 
                 // If no nodes were placed this pass, there is a cyclical dependency (feedback loop)
                 // We break to prevent hanging the Wayland loop.
-                if (completed.size == completed_start_size) {
+                if (completed.count() == completed_start_size) {
                     std.log.warn("Detected cyclical dependencies in PipeWire graph, halting layout pass", .{});
-                    break;
+                    return error.PipewireCyclicalDependency;
                 }
-
-                x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
-                y_current = 0;
-
             }
         }
     }
 
-    /// Returns file descriptor to udnerlying pipewire loop
+    /// Returns file descriptor to underlying pipewire loop
     pub fn fd(self: *const PipewireHandle) i32 {
         return c.pw_loop_get_fd(self.loop);
     }
 
-    pub fn init(self: *PipewireHandle, allocator: std.mem.Allocator) !void {
+    /// Drain all events from the registry
+    pub fn drain(self: *const PipewireHandle) !void {
+        try handleError(
+            c.pw_loop_iterate(self.loop, 0),
+        );
+    }
+
+    /// Construct the handle to pipewire
+    pub fn init(allocator: std.mem.Allocator) !*PipewireHandle {
         std.log.info("Trying to init pipewire handle...", .{});
         errdefer std.log.err("Trying to init pipewire handle failed", .{});
+
+        var self = try allocator.create(PipewireHandle);
 
         self.* = PipewireHandle{
             .allocator = allocator,
@@ -438,13 +526,25 @@ pub const PipewireHandle = struct {
         );
 
         try handleError(
-            c.pw_registry_add_listener(self.registry, &self.registry_listener, &PipewireHandle.GlobalRegistry.registry, self),
+            c.pw_registry_add_listener(
+                self.registry,
+                &self.registry_listener,
+                &PipewireHandle.GlobalRegistry.registry,
+                self,
+            ),
         );
 
-        std.log.info("Trying to init pipewire handle OK", .{});
+        defer std.log.info("Trying to init pipewire handle OK", .{});
+        return self;
     }
 
     pub fn deinit(self: *PipewireHandle) void {
-        _ = self;
+        var node_it = self.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node = entry.value_ptr;
+            node.deinit(self.allocator);
+        }
+
+        self.nodes.deinit(self.allocator);
     }
 };

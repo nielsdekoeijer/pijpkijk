@@ -15,21 +15,19 @@ pub fn customLogger(
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
 
-    // 1. Get current time
     const now = std.Io.Timestamp.now(io, .cpu_process);
 
-    // 2. Print timestamp
     stderr.setColor(.dim) catch {};
     stderr.writer.print("[{d: >10}] ", .{now.toMilliseconds()}) catch {};
     stderr.setColor(.reset) catch {};
 
-    // 3. Existing log logic
     stderr.setColor(switch (level) {
         .err => std.Io.Terminal.Color.red,
         .warn => std.Io.Terminal.Color.yellow,
         .info => std.Io.Terminal.Color.green,
         .debug => std.Io.Terminal.Color.magenta,
     }) catch {};
+
     stderr.setColor(.bold) catch {};
     stderr.writer.writeAll(level.asText()) catch {};
     stderr.setColor(.reset) catch {};

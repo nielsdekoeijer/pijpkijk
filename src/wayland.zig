@@ -8,7 +8,6 @@ const KeyState = enum {
     REPEATED,
 };
 
-// =Wayland============================================================================================================
 pub const WaylandHandle = struct {
     pub const Core = struct {
         display: *c.struct_wl_display = undefined,
@@ -23,11 +22,13 @@ pub const WaylandHandle = struct {
         frame_ready: bool = true,
 
         input: struct {
+            key_escape: ?KeyState = null,
             key_w: ?KeyState = null,
             key_a: ?KeyState = null,
             key_s: ?KeyState = null,
             key_d: ?KeyState = null,
             key_q: ?KeyState = null,
+            key_r: ?KeyState = null,
 
             mouse_x: ?f32 = null,
             mouse_y: ?f32 = null,
@@ -318,29 +319,6 @@ pub const WaylandHandle = struct {
             _ = serial;
             _ = surface;
         }
-        //
-        // /// When the mouse moves
-        // fn onMotion(
-        //     data: ?*anyopaque,
-        //     pointer: ?*c.struct_wl_pointer,
-        //     time: u32,
-        //     surface_x: c.wl_fixed_t,
-        //     surface_y: c.wl_fixed_t,
-        // ) callconv(.c) void {
-        //     // TODO: I dont understand what time does, maybe useful?
-        //     _ = time;
-        //     _ = pointer;
-        //
-        //     const handle: *WaylandHandle = @ptrCast(@alignCast(data));
-        //     const x = @as(f32, @floatCast(c.wl_fixed_to_double(surface_x)));
-        //     const y = @as(f32, @floatCast(c.wl_fixed_to_double(surface_y)));
-        //
-        //     if (handle.state.input.mouse_x) |mx| handle.state.input.mouse_dx = x - mx;
-        //     if (handle.state.input.mouse_y) |my| handle.state.input.mouse_dy = y - my;
-        //
-        //     handle.state.input.mouse_x = x;
-        //     handle.state.input.mouse_y = y;
-        // }
 
         /// When the mouse moves
         fn onMotion(
@@ -603,11 +581,13 @@ pub const WaylandHandle = struct {
                 };
 
                 switch (keysym) {
+                    c.XKB_KEY_Escape => handle.state.input.key_escape = val,
                     c.XKB_KEY_w => handle.state.input.key_w = val,
                     c.XKB_KEY_a => handle.state.input.key_a = val,
                     c.XKB_KEY_s => handle.state.input.key_s = val,
                     c.XKB_KEY_d => handle.state.input.key_d = val,
                     c.XKB_KEY_q => handle.state.input.key_q = val,
+                    c.XKB_KEY_r => handle.state.input.key_r = val,
                     else => {},
                 }
             }

@@ -14,7 +14,7 @@ pub const c = @cImport({
     @cDefine("VK_USE_PLATFORM_WAYLAND_KHR", "1");
     @cInclude("vulkan/vulkan.h");
 
-    // Nasty hack: why is pipewire so fucking awful?
+    // Nasty hack: why is pipewire so fucking awful? Weird API
     @cDefine("_Static_assert(...)", {});
     @cInclude("pipewire-0.3/pipewire/pipewire.h");
 });
