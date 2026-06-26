@@ -290,21 +290,37 @@ pub const PipewireHandle = struct {
             _ = version;
         }
 
-        fn onGlobalRemove(
-            data: ?*anyopaque,
-            id: u32,
-        ) callconv(.c) void {
-            const self: *PipewireHandle = @ptrCast(@alignCast(data));
+        fn onGlobalRemove(data: ?*anyopaque, id: u32) callconv(.c) void {
+            var self: *PipewireHandle = @ptrCast(@alignCast(data));
 
-            if (self.nodes.contains(id)) {
-                std.log.debug("Removing node {d}", .{id});
-            } else {
-                std.log.warn("Attempted to remove node {d} which doesn't exist", .{id});
+
+            if (self.nodes.getPtr(id)) |*value| {
+                (value.*).deinit(self.allocator);
+                if(!self.nodes.orderedRemove(id)) {
+                    unreachable;
+                }
+
+                std.log.debug("Node {d} removed", .{id});
+                return;
             }
 
-            if (self.nodes.fetchOrderedRemove(id)) |entry| {
-                var node = entry.value;
-                node.deinit(self.allocator);
+            var node_it = self.nodes.iterator();
+            node_loop: while (node_it.next()) |node| {
+                var out_it = node.value_ptr.outs.iterator();
+                while (out_it.next()) |port| {
+                    if (port.value_ptr.connections.swapRemove(id)) {
+                        std.log.debug("Link {d} removed from output port", .{id});
+                        continue :node_loop;
+                    }
+                }
+
+                var inp_it = node.value_ptr.inps.iterator();
+                while (inp_it.next()) |port| {
+                    if (port.value_ptr.connections.swapRemove(id)) {
+                        std.log.debug("Link {d} removed from input port", .{id});
+                        continue :node_loop;
+                    }
+                }
             }
         }
 

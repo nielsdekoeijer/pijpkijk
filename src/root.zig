@@ -584,20 +584,14 @@ pub const App = struct {
                                 var i: usize = port.value_ptr.connections.count();
                                 while (i > 0) {
                                     i -= 1;
-                                    const link_key = port.value_ptr.connections.keys()[i];
                                     const link = port.value_ptr.connections.values()[i];
 
                                     if (link.is_selected) {
                                         try handleError(c.pw_registry_destroy(self.pipewire_handle.registry, link.link_id));
-
-                                        _ = port.value_ptr.connections.swapRemove(link_key);
-                                        needs_render = true;
                                     }
                                 }
                             }
                         }
-
-                        try self.pipewire_handle.update_graph_metadata();
                     }
                 }
 
