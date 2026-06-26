@@ -11,7 +11,8 @@ pub const FRAMES_IN_FLIGHT = 3;
 
 pub const UserData = enum(u64) {
     WAYLAND,
-    PIPEWIRE,
+    PIPEWIRE_START_RETRY,
+    PIPEWIRE_EVENT,
 };
 
 pub const App = struct {
@@ -372,17 +373,30 @@ pub const App = struct {
         var gpu_frame_ready = [_]bool{ true, true, true };
 
         const wl_fd = c.wl_display_get_fd(self.wayland_handle.core.display);
-        const pw_fd = self.pipewire_handle.fd();
+
+        var pw_fd: ?i32 = null;
+        if (self.pipewire_handle.start_core()) |_| {
+            pw_fd = self.pipewire_handle.fd();
+
+            _ = try self.ring.poll_add(
+                @intFromEnum(UserData.PIPEWIRE_EVENT),
+                pw_fd.?,
+                std.posix.POLL.IN,
+            );
+        } else |_| {
+            var sqe = try self.ring.get_sqe();
+
+            sqe.prep_timeout(&.{
+                .sec = 0,
+                .nsec = 10 * 1_000_000,
+            }, 0, 0);
+
+            sqe.user_data = @intFromEnum(UserData.PIPEWIRE_START_RETRY);
+        }
 
         _ = try self.ring.poll_add(
             @intFromEnum(UserData.WAYLAND),
             wl_fd,
-            std.posix.POLL.IN,
-        );
-
-        _ = try self.ring.poll_add(
-            @intFromEnum(UserData.PIPEWIRE),
-            pw_fd,
             std.posix.POLL.IN,
         );
 
@@ -403,7 +417,7 @@ pub const App = struct {
                 // std.log.debug("Received io_uring event: '{s}'", .{@tagName(user_data)});
 
                 switch (user_data) {
-                    UserData.PIPEWIRE => {
+                    UserData.PIPEWIRE_EVENT => {
                         // If no error...
                         if (cqe.res >= 0) {
                             const revents = @as(u32, @bitCast(cqe.res));
@@ -417,7 +431,28 @@ pub const App = struct {
                         }
 
                         // Reschedule
-                        _ = try self.ring.poll_add(@intFromEnum(UserData.PIPEWIRE), pw_fd, std.posix.POLL.IN);
+                        _ = try self.ring.poll_add(@intFromEnum(UserData.PIPEWIRE_EVENT), pw_fd.?, std.posix.POLL.IN);
+                    },
+
+                    UserData.PIPEWIRE_START_RETRY => {
+                        if (self.pipewire_handle.start_core()) |_| {
+                            pw_fd = self.pipewire_handle.fd();
+
+                            _ = try self.ring.poll_add(
+                                @intFromEnum(UserData.PIPEWIRE_EVENT),
+                                pw_fd.?,
+                                std.posix.POLL.IN,
+                            );
+                        } else |_| {
+                            var sqe = try self.ring.get_sqe();
+
+                            sqe.prep_timeout(&.{
+                                .sec = 0,
+                                .nsec = 10 * 1_000_000,
+                            }, 0, 0);
+
+                            sqe.user_data = @intFromEnum(UserData.PIPEWIRE_START_RETRY);
+                        }
                     },
 
                     UserData.WAYLAND => {
@@ -536,6 +571,32 @@ pub const App = struct {
 
                 if (self.wayland_handle.state.input.key_r) |key_r| {
                     if (key_r == .PRESSED) {
+                        try self.pipewire_handle.update_graph_metadata();
+                    }
+                }
+
+                if (self.wayland_handle.state.input.key_delete) |key_delete| {
+                    if (key_delete == .PRESSED) {
+                        var node_it = self.pipewire_handle.nodes.iterator();
+                        while (node_it.next()) |*node| {
+                            var port_it = node.value_ptr.outs.iterator();
+                            while (port_it.next()) |*port| {
+                                var i: usize = port.value_ptr.connections.count();
+                                while (i > 0) {
+                                    i -= 1;
+                                    const link_key = port.value_ptr.connections.keys()[i];
+                                    const link = port.value_ptr.connections.values()[i];
+
+                                    if (link.is_selected) {
+                                        try handleError(c.pw_registry_destroy(self.pipewire_handle.registry, link.link_id));
+
+                                        _ = port.value_ptr.connections.swapRemove(link_key);
+                                        needs_render = true;
+                                    }
+                                }
+                            }
+                        }
+
                         try self.pipewire_handle.update_graph_metadata();
                     }
                 }
@@ -676,6 +737,12 @@ pub const App = struct {
                             &bezier_vertices,
                         );
                     }
+
+                    std.mem.sort(types.BezierVertex, bezier_vertices.items, {}, struct {
+                        pub fn lessThanFn(_: void, lhs: types.BezierVertex, rhs: types.BezierVertex) bool {
+                            return lhs.pos[2] > rhs.pos[2];
+                        }
+                    }.lessThanFn);
 
                     if (bezier_vertices.items.len > 0) {
                         // TODO: this is ugly as sin, and its because our use of anyopque

@@ -315,6 +315,55 @@ pub const PipewireHandle = struct {
         };
     };
 
+    /// Construct the handle to pipewire
+    pub fn init(allocator: std.mem.Allocator) !*PipewireHandle {
+        std.log.info("Trying to init pipewire handle...", .{});
+        errdefer std.log.err("Trying to init pipewire handle failed", .{});
+
+        var self = try allocator.create(PipewireHandle);
+
+        self.* = PipewireHandle{
+            .allocator = allocator,
+        };
+
+        c.pw_init(null, null);
+
+        self.loop = try handleError(
+            c.pw_loop_new(null),
+        );
+
+        self.context = try handleError(
+            c.pw_context_new(self.loop, null, 0),
+        );
+
+        defer std.log.info("Trying to init pipewire handle OK", .{});
+        return self;
+    }
+
+    pub fn start_core(self: *PipewireHandle) !void {
+        std.log.info("Trying to start pipewire handle...", .{});
+        errdefer std.log.info("Trying to start pipewire handle unsuccesful, can be retried", .{});
+
+        self.core = try handleError(
+            c.pw_context_connect(self.context, null, 0),
+        );
+
+        self.registry = try handleError(
+            c.pw_core_get_registry(self.core, c.PW_VERSION_REGISTRY, 0),
+        );
+
+        try handleError(
+            c.pw_registry_add_listener(
+                self.registry,
+                &self.registry_listener,
+                &PipewireHandle.GlobalRegistry.registry,
+                self,
+            ),
+        );
+
+        std.log.info("Trying to start pipewire handle OK", .{});
+    }
+
     /// Reconsider the graph as presented by the nodes hashmap, and determine appropriate coordinates based on
     /// underlying connections. This method updates the `self.nodes` field to be up to date.
     ///
@@ -435,7 +484,6 @@ pub const PipewireHandle = struct {
                             std.mem.sort(f32, locs.items, {}, std.sort.asc(f32));
 
                             if (locs.items.len > 0) {
-                                std.log.debug("Computed: {}", .{center_of_mass});
                                 std.mem.sort(f32, locs.items, {}, std.sort.asc(f32));
                                 center_of_mass = locs.items[locs.items.len / 2];
                             }
@@ -494,48 +542,6 @@ pub const PipewireHandle = struct {
         try handleError(
             c.pw_loop_iterate(self.loop, 0),
         );
-    }
-
-    /// Construct the handle to pipewire
-    pub fn init(allocator: std.mem.Allocator) !*PipewireHandle {
-        std.log.info("Trying to init pipewire handle...", .{});
-        errdefer std.log.err("Trying to init pipewire handle failed", .{});
-
-        var self = try allocator.create(PipewireHandle);
-
-        self.* = PipewireHandle{
-            .allocator = allocator,
-        };
-
-        c.pw_init(null, null);
-
-        self.loop = try handleError(
-            c.pw_loop_new(null),
-        );
-
-        self.context = try handleError(
-            c.pw_context_new(self.loop, null, 0),
-        );
-
-        self.core = try handleError(
-            c.pw_context_connect(self.context, null, 0),
-        );
-
-        self.registry = try handleError(
-            c.pw_core_get_registry(self.core, c.PW_VERSION_REGISTRY, 0),
-        );
-
-        try handleError(
-            c.pw_registry_add_listener(
-                self.registry,
-                &self.registry_listener,
-                &PipewireHandle.GlobalRegistry.registry,
-                self,
-            ),
-        );
-
-        defer std.log.info("Trying to init pipewire handle OK", .{});
-        return self;
     }
 
     pub fn deinit(self: *PipewireHandle) void {
