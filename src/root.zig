@@ -10,6 +10,7 @@ const types = @import("types.zig");
 pub const FRAMES_IN_FLIGHT = 3;
 
 pub const UserData = enum(u64) {
+    ANAS,
     WAYLAND,
     PIPEWIRE_START_RETRY,
     PIPEWIRE_EVENT,
@@ -388,7 +389,7 @@ pub const App = struct {
 
             sqe.prep_timeout(&.{
                 .sec = 0,
-                .nsec = 10 * 1_000_000,
+                .nsec = 1000 * 1_000_000,
             }, 0, 0);
 
             sqe.user_data = @intFromEnum(UserData.PIPEWIRE_START_RETRY);
@@ -417,6 +418,7 @@ pub const App = struct {
                 // std.log.debug("Received io_uring event: '{s}'", .{@tagName(user_data)});
 
                 switch (user_data) {
+                    UserData.ANAS => unreachable,
                     UserData.PIPEWIRE_EVENT => {
                         // If no error...
                         if (cqe.res >= 0) {
@@ -448,8 +450,8 @@ pub const App = struct {
 
                             sqe.prep_timeout(&.{
                                 .sec = 0,
-                                .nsec = 10 * 1_000_000,
-                            }, 0, 0);
+                                .nsec = 1000 * 1_000_000,
+                            }, 1, 0);
 
                             sqe.user_data = @intFromEnum(UserData.PIPEWIRE_START_RETRY);
                         }
@@ -496,7 +498,7 @@ pub const App = struct {
                     const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
                     const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
 
-                    const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.05);
+                    const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.02);
 
                     // Track where the mouse is in the world BEFORE scaling
                     const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];

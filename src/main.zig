@@ -1,52 +1,68 @@
 const std = @import("std");
-const Io = std.Io;
+const pijpkijk = @import("pijpkijk");
 
-pub fn customLogger(
-    comptime level: std.log.Level,
-    comptime scope: @EnumLiteral(),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    const io = std.Options.debug_io;
-    const prev = io.swapCancelProtection(.blocked);
-    defer _ = io.swapCancelProtection(prev);
+const CustomLogger = struct {
+    var initialized = false;
+    var starting_timestamp: ?std.Io.Timestamp = null;
+    var io: ?std.Io = null;
 
-    var buffer: [64]u8 = undefined;
-    const stderr = std.debug.lockStderr(&buffer).terminal();
-    defer std.debug.unlockStderr();
+    pub fn init(user_io: std.Io) void {
+        io = user_io;
 
-    const now = std.Io.Timestamp.now(io, .cpu_process);
+        starting_timestamp = std.Io.Timestamp.now(io.?, .awake);
 
-    stderr.setColor(.dim) catch {};
-    stderr.writer.print("[{d: >10}] ", .{now.toMilliseconds()}) catch {};
-    stderr.setColor(.reset) catch {};
+        initialized = true;
+    }
 
-    stderr.setColor(switch (level) {
-        .err => std.Io.Terminal.Color.red,
-        .warn => std.Io.Terminal.Color.yellow,
-        .info => std.Io.Terminal.Color.green,
-        .debug => std.Io.Terminal.Color.magenta,
-    }) catch {};
+    pub fn logFn(
+        comptime level: std.log.Level,
+        comptime scope: @EnumLiteral(),
+        comptime format: []const u8,
+        args: anytype,
+    ) void {
+        if (CustomLogger.initialized) {
+            var buffer: [64]u8 = undefined;
 
-    stderr.setColor(.bold) catch {};
-    stderr.writer.writeAll(level.asText()) catch {};
-    stderr.setColor(.reset) catch {};
+            const stderr = (io.?.lockStderr(&buffer, .escape_codes) catch unreachable).terminal();
+            defer io.?.unlockStderr();
 
-    stderr.setColor(.dim) catch {};
-    stderr.setColor(.bold) catch {};
-    if (scope != .default) stderr.writer.print("({t})", .{scope}) catch {};
-    stderr.writer.writeAll(": ") catch {};
-    stderr.setColor(.reset) catch {};
+            const color = switch (level) {
+                .err => std.Io.Terminal.Color.red,
+                .warn => std.Io.Terminal.Color.yellow,
+                .info => std.Io.Terminal.Color.green,
+                .debug => std.Io.Terminal.Color.magenta,
+            };
 
-    stderr.writer.print(format ++ "\n", args) catch {};
-}
+            {
+                const now = std.Io.Timestamp.now(io.?, .awake);
+                const time = now.toMilliseconds() - starting_timestamp.?.toMilliseconds();
+
+                stderr.setColor(.dim) catch unreachable;
+                stderr.writer.print("[{d: >10}] ", .{time}) catch unreachable;
+                stderr.setColor(.reset) catch unreachable;
+            }
+
+            {
+                stderr.setColor(.bold) catch unreachable;
+                stderr.setColor(color) catch unreachable;
+                stderr.writer.writeAll(level.asText()) catch unreachable;
+                stderr.setColor(.reset) catch unreachable;
+            }
+
+            {
+                if (scope != .default) stderr.writer.print("({t})", .{scope}) catch unreachable;
+                stderr.writer.writeAll(": ") catch unreachable;
+                stderr.writer.print(format ++ "\n", args) catch unreachable;
+                stderr.setColor(.reset) catch unreachable;
+            }
+        }
+    }
+};
 
 pub const std_options = std.Options{
     .log_level = if (@import("builtin").mode == .Debug) .debug else .info,
-    .logFn = customLogger,
+    .logFn = CustomLogger.logFn,
 };
-
-const pijpkijk = @import("pijpkijk");
 
 pub fn main(init: std.process.Init) !void {
     {
@@ -57,6 +73,8 @@ pub fn main(init: std.process.Init) !void {
 
     const io = init.io;
     const allocator: std.mem.Allocator = init.gpa;
+
+    CustomLogger.init(io);
 
     var app = try pijpkijk.App.init(allocator, io);
     defer app.deinit();
