@@ -1,6 +1,6 @@
 const c = @import("c.zig").c;
 
-/// Return type helper
+/// Return type helper to determine the return type of the handleError function
 fn ValidReturnType(comptime ErrorType: type) type {
     const info = @typeInfo(ErrorType);
     switch (ErrorType) {
@@ -18,9 +18,8 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
     const err_type = @TypeOf(err);
     const err_typeinfo = @typeInfo(err_type);
     switch (err_type) {
-        // NOTE: flaw here, VkResult is just c_int, so this here is retarded
-        inline c.VkResult => {
-            if (err >= c.VK_SUCCESS) {
+        inline c_int => {
+            if (err >= 0) {
                 return;
             } else {
                 return error.CError;

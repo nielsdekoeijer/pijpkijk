@@ -6,12 +6,15 @@ const handleError = @import("error.zig").handleError;
 /// A handle for interacting with pipewire
 pub const PipewireHandle = struct {
     allocator: std.mem.Allocator,
-    nodes: std.AutoArrayHashMapUnmanaged(u32, types.PipewireNode) = .empty,
     loop: *c.pw_loop = undefined,
     context: *c.pw_context = undefined,
     core: *c.pw_core = undefined,
     registry: *c.pw_registry = undefined,
     registry_listener: c.spa_hook = undefined,
+
+    /// TODO: Currently, we are conflating the notions of drawing and the notions of getting metadata from 
+    /// pipewire. This isn't very good in my perspective. I should change that.
+    nodes: std.AutoArrayHashMapUnmanaged(u32, types.PipewireNode) = .empty,
 
     /// Registry of functions that should fire based on pipewire events
     const GlobalRegistry = struct {
