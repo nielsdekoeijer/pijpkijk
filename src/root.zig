@@ -389,7 +389,7 @@ pub const App = struct {
 
             sqe.prep_timeout(&.{
                 .sec = 0,
-                .nsec = 1000 * 1_000_000,
+                .nsec = 10 * 1_000_000,
             }, 0, 0);
 
             sqe.user_data = @intFromEnum(UserData.PIPEWIRE_START_RETRY);
@@ -427,7 +427,8 @@ pub const App = struct {
                             // Check if poll input...
                             if ((revents & std.posix.POLL.IN) != 0) {
                                 try self.pipewire_handle.drain();
-                                try self.pipewire_handle.update_graph_metadata();
+
+                                    
                                 needs_state_update = true;
                             }
                         }

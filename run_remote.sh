@@ -3,6 +3,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# ip_address="10.251.223.201"
 ip_address="192.168.1.52"
 
 zig build # -Doptimize=ReleaseFast

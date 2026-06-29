@@ -171,6 +171,11 @@ pub fn build(b: *std.Build) void {
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
+    mod.linkSystemLibrary("libspa-0.2", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
     mod.linkSystemLibrary("libpipewire-0.3", .{
         .needed = true,
         .preferred_link_mode = .dynamic,

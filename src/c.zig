@@ -17,4 +17,9 @@ pub const c = @cImport({
     // Nasty hack: why is pipewire so fucking awful? Weird API
     @cDefine("_Static_assert(...)", {});
     @cInclude("pipewire-0.3/pipewire/pipewire.h");
+    @cInclude("pipewire-0.3/pipewire/extensions/profiler.h");
+    @cInclude("pipewire-0.3/pipewire/impl-module.h");
+    @cInclude("spa-0.2/spa/param/profiler.h");
+    @cInclude("spa-0.2/spa/pod/parser.h");
+    @cInclude("spa-0.2/spa/pod/iter.h");
 });

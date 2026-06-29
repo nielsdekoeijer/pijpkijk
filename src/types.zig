@@ -592,6 +592,18 @@ pub const H_NODE_SPACING: f32 = 100.0;
 pub const W_NODE_SPACING: f32 = 300.0;
 
 pub const PipewireNode = struct {
+    name: []const u8,
+    node_id: u32,
+    mean_runtime_ns: ?f32,
+    inps: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
+    outs: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
+
+    // for drawing, honestly probably shouldnt live here but I'll allow it
+    x: ?f32 = null,
+    y: ?f32 = null,
+    z: ?f32 = null,
+    port_color: ?[4]f32 = null,
+
     /// Standard color of the node
     pub const NODE_COLOR: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
 
@@ -621,17 +633,6 @@ pub const PipewireNode = struct {
 
     /// Width of pin
     pub const W_PIN: f32 = 12.5;
-
-    node_id: u32,
-    name: []const u8,
-    inps: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
-    outs: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
-
-    // for drawing, honestly probably shouldnt live here but I'll allow it
-    x: ?f32 = null,
-    y: ?f32 = null,
-    z: ?f32 = null,
-    port_color: ?[4]f32 = null,
 
     /// Computes the maximum number of pins for displaying the node, i.e. max(inp_count, out_count).
     fn computePortSlotCount(self: PipewireNode) usize {
@@ -785,7 +786,7 @@ pub const PipewireNode = struct {
 
                 if (dist < 10.0) {
                     link_entry.value_ptr.is_selected = true;
-                } 
+                }
             }
         }
     }
@@ -909,6 +910,24 @@ pub const PipewireNode = struct {
             16.0,
             list,
         );
+
+        if (self.mean_runtime_ns) |runtime| {
+            var buf: [32]u8 = undefined;
+            const runtime_text = try std.fmt.bufPrint(&buf, "{d:.1} us", .{runtime / 1000.0});
+
+            try TextVertex.append(
+                allocator,
+                atlas,
+                runtime_text,
+                .Center,
+                title_x,
+                title_y + 18.0,
+                self.z.? + 0.2,
+                title_max_w,
+                12.0,
+                list,
+            );
+        }
 
         {
             var i: usize = 0;
