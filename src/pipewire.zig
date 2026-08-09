@@ -25,6 +25,13 @@ pub const PipewireLink = struct {
     selected: bool = false,
 };
 
+const PortListenerData = struct {
+    handle: *PipewireHandle,
+    node_id: u32,
+    is_inp: bool,
+    listener: c.spa_hook = std.mem.zeroes(c.spa_hook),
+};
+
 /// A handle for interacting with pipewire
 pub const PipewireHandle = struct {
     allocator: std.mem.Allocator,
@@ -44,6 +51,7 @@ pub const PipewireHandle = struct {
     pipewire_nodes: std.AutoArrayHashMapUnmanaged(u32, PipewireNode) = .empty,
     pipewire_links: std.AutoArrayHashMapUnmanaged(u32, PipewireLink) = .empty,
     pipewire_ports: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
+    port_listeners: std.ArrayListUnmanaged(*PortListenerData) = .empty,
 
     const ProfilerRegistry = struct {
         /// Handle the spa messages coming from pipewire containing the profiling information
@@ -141,6 +149,56 @@ pub const PipewireHandle = struct {
         const registry = c.pw_profiler_events{
             .version = c.PW_VERSION_PROFILER_EVENTS,
             .profile = PipewireHandle.ProfilerRegistry.profile,
+        };
+    };
+
+    const PortEvents = struct {
+        fn onParam(data: ?*anyopaque, _: c_int, id: u32, _: u32, _: u32, param_pod: [*c]const c.spa_pod) callconv(.c) void {
+            if (id != c.SPA_PARAM_Latency) return;
+            const pod: *const c.spa_pod = param_pod orelse return;
+            const port_data: *PortListenerData = @ptrCast(@alignCast(data));
+
+            const obj: *const c.spa_pod_object = @ptrCast(@alignCast(pod));
+
+            var min_rate: ?u32 = null;
+            var max_rate: ?u32 = null;
+
+            var prop_iter = c.spa_pod_prop_first(&obj.body);
+            while (c.spa_pod_prop_is_inside(&obj.body, obj.pod.size, prop_iter)) {
+                switch (prop_iter.*.key) {
+                    c.SPA_PARAM_LATENCY_minRate => {
+                        const val: *const c.spa_pod_int = @ptrCast(@alignCast(&prop_iter.*.value));
+                        min_rate = @intCast(val.value);
+                    },
+                    c.SPA_PARAM_LATENCY_maxRate => {
+                        const val: *const c.spa_pod_int = @ptrCast(@alignCast(&prop_iter.*.value));
+                        max_rate = @intCast(val.value);
+                    },
+                    else => {},
+                }
+                prop_iter = @ptrCast(@alignCast(c.spa_pod_prop_next(prop_iter)));
+            }
+
+            if (min_rate != null and max_rate != null) {
+                const latency = types.PipewireLatency{
+                    .min = min_rate.?,
+                    .max = max_rate.?,
+                };
+
+                if (port_data.handle.nodes.getPtr(port_data.node_id)) |node| {
+                    if (port_data.is_inp) {
+                        node.upstream = latency;
+                    } else {
+                        node.downstream = latency;
+                    }
+                }
+            }
+        }
+
+        const events = c.pw_port_events{
+            .version = c.PW_VERSION_PORT_EVENTS,
+            .info = null,
+            .param = PipewireHandle.PortEvents.onParam,
         };
     };
 
@@ -461,6 +519,22 @@ pub const PipewireHandle = struct {
                         return error.PipewireError;
                     }
 
+                    // Bind port to subscribe to latency params
+                    bind_port: {
+                        const proxy: ?*c.pw_port = @ptrCast(c.pw_registry_bind(self.registry, id, type_str, c.PW_VERSION_PORT, 0) orelse break :bind_port);
+                        const port_data = self.allocator.create(PortListenerData) catch break :bind_port;
+                        port_data.* = .{ .handle = self, .node_id = node_id_found, .is_inp = is_inp_found };
+                        self.port_listeners.append(self.allocator, port_data) catch {
+                            self.allocator.destroy(port_data);
+                            break :bind_port;
+                        };
+
+                        _ = c.pw_port_add_listener(proxy, &port_data.listener, &PipewireHandle.PortEvents.events, port_data);
+
+                        var param_ids = [_]u32{c.SPA_PARAM_Latency};
+                        _ = c.pw_port_subscribe_params(proxy, &param_ids, 1);
+                    }
+
                     self.nodes_dirty = true;
 
                     return;
@@ -755,6 +829,11 @@ pub const PipewireHandle = struct {
             const node = entry.value_ptr;
             node.deinit(self.allocator);
         }
+
+        for (self.port_listeners.items) |port_data| {
+            self.allocator.destroy(port_data);
+        }
+        self.port_listeners.deinit(self.allocator);
 
         self.nodes.deinit(self.allocator);
         self.pipewire_nodes.deinit(self.allocator);

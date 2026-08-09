@@ -937,6 +937,42 @@ pub const PipewireNode = struct {
             );
         }
 
+        // Upstream latency (above inputs)
+        if (self.upstream) |lat| {
+            var buf: [32]u8 = undefined;
+            const lat_text = try std.fmt.bufPrint(&buf, "{}/{}", .{ lat.min, lat.max });
+            try TextVertex.append(
+                allocator,
+                atlas,
+                lat_text,
+                .Left,
+                self.x.? + W_PIN + 8.0,
+                self.y.? + H_OFFSET_TITLE - 14.0,
+                self.z.? + 0.2,
+                W_NODE / 2.0 - 20.0,
+                10.0,
+                list,
+            );
+        }
+
+        // Downstream latency (above outputs)
+        if (self.downstream) |lat| {
+            var buf: [32]u8 = undefined;
+            const lat_text = try std.fmt.bufPrint(&buf, "{}/{}", .{ lat.min, lat.max });
+            try TextVertex.append(
+                allocator,
+                atlas,
+                lat_text,
+                .Right,
+                self.x.? + W_NODE - W_PIN - 8.0,
+                self.y.? + H_OFFSET_TITLE - 14.0,
+                self.z.? + 0.2,
+                W_NODE / 2.0 - 20.0,
+                10.0,
+                list,
+            );
+        }
+
         {
             var i: usize = 0;
             var port_it = self.inps.iterator();
