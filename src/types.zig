@@ -786,22 +786,26 @@ pub const PipewireNode = struct {
                 const other_node_index = other.getInpPortVisualIndex(link.port_id) orelse return error.PipewireError;
                 const bbox = self.computeBezierBoundingBox(self_node_index, other, other_node_index);
 
-                // Get closest point on curve
-                var t: f32 = 0.5;
-                for (0..4) |_| {
-                    const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
-                    const deriv = getBezierDeriv(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
-                    const diff = [_]f32{ point[0] - pos[0], point[1] - pos[1] };
-                    t = t - (diff[0] * deriv[0] + diff[1] * deriv[1]) / (deriv[0] * deriv[0] + deriv[1] * deriv[1]);
-                    t = @min(@max(t, 0.0), 1.0);
+                // Get closest point on curve using multiple start points
+                var best_dist: f32 = std.math.inf(f32);
+                const starts = [_]f32{ 0.0, 0.25, 0.5, 0.75, 1.0 };
+                for (starts) |start| {
+                    var t: f32 = start;
+                    for (0..8) |_| {
+                        const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+                        const deriv = getBezierDeriv(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+                        const diff = [_]f32{ point[0] - pos[0], point[1] - pos[1] };
+                        const denom = deriv[0] * deriv[0] + deriv[1] * deriv[1];
+                        if (denom < 1e-6) break;
+                        t = t - (diff[0] * deriv[0] + diff[1] * deriv[1]) / denom;
+                        t = @min(@max(t, 0.0), 1.0);
+                    }
+                    const pt = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+                    const d = @sqrt((pt[0] - pos[0]) * (pt[0] - pos[0]) + (pt[1] - pos[1]) * (pt[1] - pos[1]));
+                    if (d < best_dist) best_dist = d;
                 }
 
-                const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
-                const dist = @sqrt(
-                    (point[0] - pos[0]) * (point[0] - pos[0]) + (point[1] - pos[1]) * (point[1] - pos[1]),
-                );
-
-                if (dist < 10.0) {
+                if (best_dist < 12.0) {
                     link_entry.value_ptr.is_selected = true;
                 }
             }
@@ -830,7 +834,7 @@ pub const PipewireNode = struct {
 
                 // Sample the bezier curve and check if any point falls within the region
                 var found = false;
-                const steps: usize = 20;
+                const steps: usize = 40;
                 for (0..steps + 1) |step| {
                     const t = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(steps));
                     const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
