@@ -191,9 +191,17 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
 - [ ] Rewrite `README.md`: screenshot/gif, install (Nix + non-Nix), controls table,
       `--help` output, the locked-down decisions above, and non-goals.
 - [ ] Add `CHANGELOG.md`; tag `v1.0.0` when this list is done.
-- [ ] **Fix `default.nix`**: drop `sdl3` (unused); add real `buildInputs` — `wayland`,
+- [x] **Fix `default.nix`**: drop `sdl3` (unused); add real `buildInputs` — `wayland`,
       `wayland-protocols`, `vulkan-headers`, `vulkan-loader`, `pipewire`, `libxkbcommon`,
-      `pkg-config`. Verify `nix build --rebuild` in a clean sandbox.
+      `pkg-config`. Verify `nix build` in a clean sandbox.
+- [x] **Portable release binary**: `nix build` produces an FHS-compatible binary with
+      wayland-client, libxkbcommon, and libffi statically linked. Only vulkan and pipewire
+      remain dynamic (they dlopen drivers/plugins anyway). patchelf sets interpreter and
+      rpath for standard Linux distros.
+- [x] **`nix run` for NixOS testing**: wrapper app invokes the glibc dynamic linker and
+      sets `LD_LIBRARY_PATH` for vulkan + pipewire from the nix store.
+- [x] **`.github/workflows/release.yml`**: CI release workflow triggered on `v*` tags.
+      Installs Nix, runs `nix build`, packages binary into tarball, creates GitHub Release.
 - [ ] Pin `slangc` + `msdf-atlas-gen` in the flake for reproducible artifacts.
 - [ ] Rework `build.zig`: generated SPIR-V / atlas flow through `LazyPath` into the Zig
       cache — **never write into `src/`**.
@@ -269,7 +277,7 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
 
 ## Carry-over lessons from the old code (don't reproduce)
 - `errdefer` double-free at `root.zig:293/303` (bezier/text errdefers freed the *quad* set).
-- `default.nix` depended on `sdl3` while the app links wayland/vulkan/pipewire.
+- ~~`default.nix` depended on `sdl3` while the app links wayland/vulkan/pipewire.~~ Fixed.
 - Build wrote generated artifacts into `src/` (should be cache-only).
 - Version drift across `.zon` / `default.nix` / `App.version`.
 - Event loop used `wl_display_dispatch` under an external poll (use the prepare_read dance).
