@@ -10,7 +10,7 @@ pub const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("xkbcommon/xkbcommon.h");
 
-    // Import vulkan 
+    // Import vulkan
     @cDefine("VK_USE_PLATFORM_WAYLAND_KHR", "1");
     @cInclude("vulkan/vulkan.h");
 
@@ -22,4 +22,5 @@ pub const c = @cImport({
     @cInclude("spa-0.2/spa/param/profiler.h");
     @cInclude("spa-0.2/spa/pod/parser.h");
     @cInclude("spa-0.2/spa/pod/iter.h");
+    @cInclude("spa-0.2/spa/param/latency-utils.h");
 });
