@@ -46,6 +46,7 @@ nix run
 | Drag node        | Move node       |
 | Drag port        | Create link     |
 | Drag empty       | Region select   |
+| Shift+drag empty | Extend selection |
 | Right drag       | Pan camera      |
 | Scroll           | Zoom            |
 
@@ -65,6 +66,10 @@ nix run
 - Session (patchbay persistence) management
 - Node creation — link editing only
 - Undo/redo
+
+## AI disclosure
+
+Parts of this codebase were developed with assistance from Claude (Anthropic).
 
 ## License
 

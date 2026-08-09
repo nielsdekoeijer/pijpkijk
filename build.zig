@@ -230,6 +230,13 @@ pub fn build(b: *std.Build) void {
         .flags = &[_][]const u8{"-O3"},
     });
 
+    const pointer_gestures = addWaylandProtocol(b, "src/protocols/pointer-gestures-unstable-v1.xml", "pointer-gestures-unstable-v1-protocol");
+    mod.addIncludePath(pointer_gestures.h_dir);
+    mod.addCSourceFile(.{
+        .file = pointer_gestures.c,
+        .flags = &[_][]const u8{"-O3"},
+    });
+
     const exe = b.addExecutable(.{
         .name = "pijpkijk",
         .root_module = b.createModule(.{

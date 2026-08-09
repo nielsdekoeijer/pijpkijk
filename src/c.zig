@@ -8,6 +8,7 @@ pub const c = @cImport({
     @cInclude("xdg-shell-protocol.h");
     @cInclude("cursor-shape-v1-protocol.h");
     @cInclude("fractional-scale-v1-protocol.h");
+    @cInclude("pointer-gestures-unstable-v1-protocol.h");
     @cInclude("sys/mman.h");
     @cInclude("unistd.h");
     @cInclude("xkbcommon/xkbcommon.h");

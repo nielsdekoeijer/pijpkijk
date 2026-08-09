@@ -1,7 +1,7 @@
 # pijpkijk — Road to 1.0
 
-A clean-room rewrite of the PipeWire graph viewer. **Zero AI-generated code** — this
-document is the plan; every line of the implementation is written by hand.
+A clean-room rewrite of the PipeWire graph viewer. This
+document is the plan.
 
 Goal: a *minimal* PipeWire graph viewer/patchbay. Everything you need, nothing more.
 Raw Wayland + Vulkan (dynamic rendering) + PipeWire + io_uring, in Zig.

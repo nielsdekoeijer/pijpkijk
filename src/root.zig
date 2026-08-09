@@ -509,28 +509,53 @@ pub const App = struct {
             if (needs_state_update) {
                 needs_state_update = false;
 
-                if (self.wayland_handle.state.input.scroll_y != 0) {
+                if (self.wayland_handle.state.input.scroll_y != 0 or self.wayland_handle.state.input.scroll_x != 0) {
+                    if (self.wayland_handle.state.input.scroll_is_finger) {
+                        // Trackpad 2-finger scroll → pan
+                        self.camera_pos[0] += self.wayland_handle.state.input.scroll_x * 3.0 / self.scale;
+                        self.camera_pos[1] += self.wayland_handle.state.input.scroll_y * 3.0 / self.scale;
+                    } else {
+                        // Mouse wheel → zoom
+                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+
+                        const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.02);
+
+                        const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
+                        const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
+
+                        self.scale *= zoom_factor;
+                        self.scale = std.math.clamp(self.scale, 0.05, 5.0);
+
+                        const world_x_after = (mouse_x / self.scale) + self.camera_pos[0];
+                        const world_y_after = (mouse_y / self.scale) + self.camera_pos[1];
+
+                        self.camera_pos[0] += (world_x_before - world_x_after);
+                        self.camera_pos[1] += (world_y_before - world_y_after);
+                    }
+
+                    self.wayland_handle.state.input.scroll_x = 0;
+                    self.wayland_handle.state.input.scroll_y = 0;
+                    self.wayland_handle.scale_snapshot = self.scale;
+                    needs_render = true;
+                }
+
+                // Pinch gesture → zoom
+                if (self.wayland_handle.state.input.pinch_scale != 0) {
                     const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
                     const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
 
-                    const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.02);
-
-                    // Track where the mouse is in the world BEFORE scaling
                     const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
 
-                    self.scale *= zoom_factor;
-                    self.scale = std.math.clamp(self.scale, 0.05, 5.0);
+                    self.scale = std.math.clamp(self.wayland_handle.state.input.pinch_scale, 0.05, 5.0);
 
-                    // Track where the mouse is in the world AFTER scaling
                     const world_x_after = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y_after = (mouse_y / self.scale) + self.camera_pos[1];
 
-                    // Pan the camera so the mouse stays over the exact same world coordinate
                     self.camera_pos[0] += (world_x_before - world_x_after);
                     self.camera_pos[1] += (world_y_before - world_y_after);
 
-                    self.wayland_handle.state.input.scroll_y = 0;
                     needs_render = true;
                 }
 

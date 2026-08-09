@@ -38,7 +38,10 @@ pub const WaylandHandle = struct {
             mouse_y: ?f32 = null,
             mouse_dx: f32 = 0,
             mouse_dy: f32 = 0,
+            scroll_x: f32 = 0,
             scroll_y: f32 = 0,
+            scroll_is_finger: bool = false,
+            pinch_scale: f32 = 0,
             mouse_down_l: bool = false,
             mouse_down_r: bool = false,
             shift_held: bool = false,
@@ -77,6 +80,54 @@ pub const WaylandHandle = struct {
 
         const listener = c.struct_wp_fractional_scale_v1_listener{
             .preferred_scale = FractionalScale.onPreferredScale,
+        };
+    };
+
+    pub const PointerGesturePinch = struct {
+        pinch: ?*c.struct_zwp_pointer_gesture_pinch_v1 = null,
+        base_scale: f32 = 1.0,
+
+        fn onBegin(
+            data: ?*anyopaque,
+            _: ?*c.struct_zwp_pointer_gesture_pinch_v1,
+            _: u32,
+            _: u32,
+            _: ?*c.struct_wl_surface,
+            _: u32,
+        ) callconv(.c) void {
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            handle.gesture_pinch.base_scale = handle.scale_snapshot;
+        }
+
+        fn onUpdate(
+            data: ?*anyopaque,
+            _: ?*c.struct_zwp_pointer_gesture_pinch_v1,
+            _: u32,
+            _: c.wl_fixed_t,
+            _: c.wl_fixed_t,
+            scale: c.wl_fixed_t,
+            _: c.wl_fixed_t,
+        ) callconv(.c) void {
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            const s = @as(f32, @floatCast(c.wl_fixed_to_double(scale)));
+            handle.state.input.pinch_scale = handle.gesture_pinch.base_scale * s;
+        }
+
+        fn onEnd(
+            data: ?*anyopaque,
+            _: ?*c.struct_zwp_pointer_gesture_pinch_v1,
+            _: u32,
+            _: u32,
+            _: i32,
+        ) callconv(.c) void {
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            handle.state.input.pinch_scale = 0;
+        }
+
+        const listener = c.struct_zwp_pointer_gesture_pinch_v1_listener{
+            .begin = PointerGesturePinch.onBegin,
+            .update = PointerGesturePinch.onUpdate,
+            .end = PointerGesturePinch.onEnd,
         };
     };
 
@@ -184,6 +235,7 @@ pub const WaylandHandle = struct {
         wm_base: ?*c.struct_xdg_wm_base = null,
         cursor_shape_manager: ?*c.struct_wp_cursor_shape_manager_v1 = null,
         fractional_scale_manager: ?*c.struct_wp_fractional_scale_manager_v1 = null,
+        pointer_gestures: ?*c.struct_zwp_pointer_gestures_v1 = null,
 
         /// We get told what global objects exist
         fn onRegistryGlobal(
@@ -240,8 +292,16 @@ pub const WaylandHandle = struct {
                 }
 
                 std.log.info("Bound interface '{s}' to registry", .{iface});
+            } else if (std.mem.eql(u8, iface, "zwp_pointer_gestures_v1")) {
+                handle.registry_global.pointer_gestures = @ptrCast(c.wl_registry_bind(registry, id, &c.zwp_pointer_gestures_v1_interface, 1));
+                if (handle.registry_global.pointer_gestures == null) {
+                    std.log.err("Failed to bind interface '{s}' to registry", .{iface});
+                    return error.WaylandError;
+                }
+
+                std.log.info("Bound interface '{s}' to registry", .{iface});
             } else if (std.mem.eql(u8, iface, "wl_seat")) {
-                handle.registry_global.seat = @ptrCast(c.wl_registry_bind(registry, id, &c.wl_seat_interface, 1));
+                handle.registry_global.seat = @ptrCast(c.wl_registry_bind(registry, id, &c.wl_seat_interface, 5));
                 if (handle.registry_global.seat == null) {
                     std.log.err("Failed to bind interface '{s}' to registry", .{iface});
                     return error.WaylandError;
@@ -308,6 +368,19 @@ pub const WaylandHandle = struct {
                     handle.registry_seat.cursor_shape_device = @ptrCast(
                         c.wp_cursor_shape_manager_v1_get_pointer(mgr, handle.registry_seat.pointer),
                     );
+                }
+
+                // Get pinch gesture if the gesture manager is available
+                if (handle.registry_global.pointer_gestures) |gestures| {
+                    handle.gesture_pinch.pinch = @ptrCast(
+                        c.zwp_pointer_gestures_v1_get_pinch_gesture(gestures, handle.registry_seat.pointer),
+                    );
+                    if (handle.gesture_pinch.pinch) |pinch| {
+                        try handleError(
+                            c.zwp_pointer_gesture_pinch_v1_add_listener(pinch, &PointerGesturePinch.listener, handle),
+                        );
+                        std.log.info("Pinch gesture listener attached", .{});
+                    }
                 }
             }
 
@@ -443,10 +516,12 @@ pub const WaylandHandle = struct {
             _ = pointer;
             _ = time;
             const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            const v = @as(f32, @floatCast(c.wl_fixed_to_double(value)));
 
             if (axis == c.WL_POINTER_AXIS_VERTICAL_SCROLL) {
-                handle.state.input.scroll_y += @as(f32, @floatCast(c.wl_fixed_to_double(value)));
-                std.log.debug("Registered 'SCROLL' with value {}", .{value});
+                handle.state.input.scroll_y += v;
+            } else if (axis == c.WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
+                handle.state.input.scroll_x += v;
             }
         }
 
@@ -459,15 +534,15 @@ pub const WaylandHandle = struct {
             _ = pointer;
         }
 
-        /// Can be ignored
+        /// Track whether scroll comes from finger (trackpad) or wheel
         fn onAxisSource(
             data: ?*anyopaque,
             pointer: ?*c.struct_wl_pointer,
             axis_source: u32,
         ) callconv(.c) void {
-            _ = data;
             _ = pointer;
-            _ = axis_source;
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            handle.state.input.scroll_is_finger = (axis_source == c.WL_POINTER_AXIS_SOURCE_FINGER);
         }
 
         /// Can be ignored
@@ -719,6 +794,9 @@ pub const WaylandHandle = struct {
     registry_surface: RegistrySurface = .{},
     registry_top_level: RegistryTopLevel = .{},
     fractional_scale: FractionalScale = .{},
+    gesture_pinch: PointerGesturePinch = .{},
+    /// Snapshot of App.scale for pinch gesture base reference
+    scale_snapshot: f32 = 1.0,
 
     pub fn init(self: *WaylandHandle) !void {
         std.log.info("Trying to init wayland handle...", .{});
@@ -852,6 +930,8 @@ pub const WaylandHandle = struct {
         if (self.registry_keyboard.xkb_keymap) |s| c.xkb_keymap_unref(s);
         c.xkb_context_unref(self.core.xkb_context);
 
+        if (self.gesture_pinch.pinch) |s| c.zwp_pointer_gesture_pinch_v1_destroy(s);
+        if (self.registry_global.pointer_gestures) |s| c.zwp_pointer_gestures_v1_destroy(s);
         if (self.fractional_scale.fractional_scale) |s| c.wp_fractional_scale_v1_destroy(s);
         if (self.registry_global.fractional_scale_manager) |s| c.wp_fractional_scale_manager_v1_destroy(s);
         if (self.registry_seat.cursor_shape_device) |s| c.wp_cursor_shape_device_v1_destroy(s);
