@@ -187,8 +187,8 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
 ---
 
 ## Phase 0 — Foundation (before app code)
-- [ ] Add `LICENSE` (repo is legally un-consumable without it).
-- [ ] Rewrite `README.md`: screenshot/gif, install (Nix + non-Nix), controls table,
+- [x] Add `LICENSE` (repo is legally un-consumable without it).
+- [x] Rewrite `README.md`: screenshot/gif, install (Nix + non-Nix), controls table,
       `--help` output, the locked-down decisions above, and non-goals.
 - [ ] Add `CHANGELOG.md`; tag `v1.0.0` when this list is done.
 - [x] **Fix `default.nix`**: drop `sdl3` (unused); add real `buildInputs` — `wayland`,
@@ -206,7 +206,7 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
 - [ ] Rework `build.zig`: generated SPIR-V / atlas flow through `LazyPath` into the Zig
       cache — **never write into `src/`**.
 - [x] Single version source (inject into build; kill the 0.0.0 / 0.1.0 drift).
-- [ ] `.github/workflows/ci.yml` scoped to what CI can test: `zig fmt --check`,
+- [x] `.github/workflows/ci.yml` scoped to what CI can test: `zig fmt --check`,
       `zig build`, pure-logic `zig build test`, `nix flake check`.
 
 ## Phase 1 — gfx layer + walking skeleton
