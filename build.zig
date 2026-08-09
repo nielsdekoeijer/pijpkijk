@@ -161,11 +161,6 @@ pub fn build(b: *std.Build) void {
         .preferred_link_mode = .dynamic,
         .use_pkg_config = .yes,
     });
-    mod.linkSystemLibrary("wayland-cursor", .{
-        .needed = true,
-        .preferred_link_mode = .dynamic,
-        .use_pkg_config = .yes,
-    });
     mod.linkSystemLibrary("xkbcommon", .{
         .needed = true,
         .preferred_link_mode = .dynamic,
