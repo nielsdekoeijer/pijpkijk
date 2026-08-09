@@ -827,8 +827,8 @@ pub const App = struct {
                         if (kq == .PRESSED or kq == .REPEATED) {
                             const sw: f32 = @floatFromInt(self.swap_extent.width);
                             const sh: f32 = @floatFromInt(self.swap_extent.height);
-                            const overlay_w: f32 = 420.0;
-                            const overlay_h: f32 = 440.0;
+                            const overlay_w: f32 = 540.0;
+                            const overlay_h: f32 = 520.0;
                             const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
                             const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
                             const ow = overlay_w / self.scale;
@@ -922,11 +922,11 @@ pub const App = struct {
                         if (kq == .PRESSED or kq == .REPEATED) {
                             const sw: f32 = @floatFromInt(self.swap_extent.width);
                             const sh: f32 = @floatFromInt(self.swap_extent.height);
-                            const overlay_w: f32 = 420.0;
-                            const overlay_h: f32 = 440.0;
+                            const overlay_w: f32 = 540.0;
+                            const overlay_h: f32 = 520.0;
                             const base_x = ((sw - overlay_w) / 2.0 + 30.0) / self.scale + self.camera_pos[0];
-                            const base_y = ((sh - overlay_h) / 2.0 + 30.0) / self.scale + self.camera_pos[1];
-                            const line_h: f32 = 24.0 / self.scale;
+                            const base_y = ((sh - overlay_h) / 2.0 + 40.0) / self.scale + self.camera_pos[1];
+                            const line_h: f32 = 28.0 / self.scale;
                             const fs_title: f32 = 28.0 / self.scale;
                             const fs: f32 = 20.0 / self.scale;
                             const max_w: f32 = (overlay_w - 60.0) / self.scale;
