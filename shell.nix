@@ -2,6 +2,20 @@
   pkgs,
   ...
 }:
+let
+  # Same static overrides as default.nix for consistent builds
+  wayland-static = pkgs.wayland.overrideAttrs (old: {
+    mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=both" ];
+  });
+
+  xkbcommon-static = pkgs.libxkbcommon.overrideAttrs (old: {
+    mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=both" ];
+  });
+
+  libffi-static = pkgs.libffi.overrideAttrs (old: {
+    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
+  });
+in
 pkgs.mkShell rec {
   nativeBuildInputs = [
     pkgs.zig
@@ -15,11 +29,11 @@ pkgs.mkShell rec {
     pkgs.msdf-atlas-gen
     pkgs.pipewire.dev
     pkgs.pkg-config
-    # future
-    pkgs.wayland
+    wayland-static
     pkgs.wayland-scanner
     pkgs.wayland-protocols
-    pkgs.libxkbcommon.dev
+    xkbcommon-static.dev
+    libffi-static
   ];
 
   shellHook = ''
