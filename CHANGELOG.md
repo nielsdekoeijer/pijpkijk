@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.0
+
+Trackpad gesture support and cleanup.
+
+- Trackpad 2-finger scroll pans the camera (mouse wheel still zooms)
+- Pinch-to-zoom via zwp_pointer_gestures_v1 protocol
+- Horizontal scrolling support
+- Remove spammy swap extent debug logging
+
 ## v0.4.0
 
 DPI scaling, selection UX, and graph layout improvements.
