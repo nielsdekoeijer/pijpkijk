@@ -555,6 +555,7 @@ pub const PipewireHandle = struct {
                 }
 
                 std.log.debug("Node {d} removed", .{id});
+                self.nodes_dirty = true;
                 return;
             }
 
@@ -564,6 +565,7 @@ pub const PipewireHandle = struct {
                 while (out_it.next()) |port| {
                     if (port.value_ptr.connections.swapRemove(id)) {
                         std.log.debug("Link {d} removed from output port", .{id});
+                        self.nodes_dirty = true;
                         continue :node_loop;
                     }
                 }
@@ -572,6 +574,7 @@ pub const PipewireHandle = struct {
                 while (inp_it.next()) |port| {
                     if (port.value_ptr.connections.swapRemove(id)) {
                         std.log.debug("Link {d} removed from input port", .{id});
+                        self.nodes_dirty = true;
                         continue :node_loop;
                     }
                 }
