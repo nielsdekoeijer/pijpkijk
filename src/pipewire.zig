@@ -806,6 +806,41 @@ pub const PipewireHandle = struct {
         }
     }
 
+    /// Create a PipeWire link between an output port and an input port
+    pub fn createLink(self: *PipewireHandle, out_node: u32, out_port: u32, inp_node: u32, inp_port: u32) void {
+        var out_node_buf: [16]u8 = undefined;
+        var out_port_buf: [16]u8 = undefined;
+        var inp_node_buf: [16]u8 = undefined;
+        var inp_port_buf: [16]u8 = undefined;
+
+        const out_node_str = std.fmt.bufPrintZ(&out_node_buf, "{d}", .{out_node}) catch return;
+        const out_port_str = std.fmt.bufPrintZ(&out_port_buf, "{d}", .{out_port}) catch return;
+        const inp_node_str = std.fmt.bufPrintZ(&inp_node_buf, "{d}", .{inp_node}) catch return;
+        const inp_port_str = std.fmt.bufPrintZ(&inp_port_buf, "{d}", .{inp_port}) catch return;
+
+        const items = [_]c.spa_dict_item{
+            .{ .key = c.PW_KEY_LINK_OUTPUT_NODE, .value = out_node_str.ptr },
+            .{ .key = c.PW_KEY_LINK_OUTPUT_PORT, .value = out_port_str.ptr },
+            .{ .key = c.PW_KEY_LINK_INPUT_NODE, .value = inp_node_str.ptr },
+            .{ .key = c.PW_KEY_LINK_INPUT_PORT, .value = inp_port_str.ptr },
+        };
+
+        const props = c.spa_dict{
+            .flags = 0,
+            .n_items = items.len,
+            .items = &items,
+        };
+
+        _ = c.pw_core_create_object(
+            self.core,
+            "link-factory",
+            c.PW_TYPE_INTERFACE_Link,
+            c.PW_VERSION_LINK,
+            &props,
+            0,
+        );
+    }
+
     /// Returns file descriptor to underlying pipewire loop
     pub fn fd(self: *const PipewireHandle) i32 {
         return c.pw_loop_get_fd(self.loop);

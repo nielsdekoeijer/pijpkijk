@@ -73,6 +73,14 @@ pub const App = struct {
     scale: f32,
     selected_node: ?usize,
     drag_start: ?[2]f32 = null,
+    port_drag: ?PortDragState = null,
+
+    const PortDragState = struct {
+        node_id: u32,
+        port_id: u32,
+        is_output: bool,
+        anchor: [2]f32,
+    };
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -533,36 +541,62 @@ pub const App = struct {
                     const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y = (mouse_y / self.scale) + self.camera_pos[1];
 
-                    if (self.selected_node) |node_id| {
+                    if (self.port_drag != null) {
+                        // Port drag in progress: preview follows mouse via render
+                        needs_render = true;
+                    } else if (self.selected_node) |node_id| {
                         if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
                             node.x.? += self.wayland_handle.state.input.mouse_dx / self.scale;
                             node.y.? += self.wayland_handle.state.input.mouse_dy / self.scale;
                             needs_render = true;
                         }
                     } else {
-                        // First frame of drag: try to pick a node, otherwise start region select
+                        // First frame of drag: try port hit, then node pick, then region select
                         if (self.drag_start == null) {
-                            var hit_node = false;
-                            var it = self.pipewire_handle.nodes.iterator();
-                            while (it.next()) |entry| {
-                                const n = entry.value_ptr;
-                                if (n.x) |nx| {
-                                    if (n.y) |ny| {
-                                        const w = types.PipewireNode.W_NODE;
-                                        const h = n.computeNodeHeight();
-                                        if (world_x >= nx and world_x <= nx + w and
-                                            world_y >= ny and world_y <= ny + h)
-                                        {
-                                            self.selected_node = entry.key_ptr.*;
-                                            hit_node = true;
-                                            break;
-                                        }
+                            // Try port hit-test first
+                            var port_hit: ?types.PipewireNode.PortHit = null;
+                            {
+                                var it = self.pipewire_handle.nodes.iterator();
+                                while (it.next()) |entry| {
+                                    if (entry.value_ptr.hitTestPort(world_x, world_y)) |hit| {
+                                        port_hit = hit;
+                                        break;
                                     }
                                 }
                             }
 
-                            if (!hit_node) {
-                                self.drag_start = .{ world_x, world_y };
+                            if (port_hit) |hit| {
+                                self.port_drag = .{
+                                    .node_id = hit.node_id,
+                                    .port_id = hit.port_id,
+                                    .is_output = hit.is_output,
+                                    .anchor = hit.center,
+                                };
+                                needs_render = true;
+                            } else {
+                                // Try node pick
+                                var hit_node = false;
+                                var it = self.pipewire_handle.nodes.iterator();
+                                while (it.next()) |entry| {
+                                    const n = entry.value_ptr;
+                                    if (n.x) |nx| {
+                                        if (n.y) |ny| {
+                                            const w = types.PipewireNode.W_NODE;
+                                            const h = n.computeNodeHeight();
+                                            if (world_x >= nx and world_x <= nx + w and
+                                                world_y >= ny and world_y <= ny + h)
+                                            {
+                                                self.selected_node = entry.key_ptr.*;
+                                                hit_node = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!hit_node) {
+                                    self.drag_start = .{ world_x, world_y };
+                                }
                             }
                         }
 
@@ -587,7 +621,30 @@ pub const App = struct {
                         }
                     }
                 } else {
-                    // Let go of the node on release
+                    // Mouse released
+                    if (self.port_drag) |drag| {
+                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                        const world_x = (mouse_x / self.scale) + self.camera_pos[0];
+                        const world_y = (mouse_y / self.scale) + self.camera_pos[1];
+
+                        // Hit-test for a target port of opposite type
+                        var it = self.pipewire_handle.nodes.iterator();
+                        while (it.next()) |entry| {
+                            if (entry.value_ptr.hitTestPort(world_x, world_y)) |hit| {
+                                if (hit.is_output != drag.is_output) {
+                                    if (drag.is_output) {
+                                        self.pipewire_handle.createLink(drag.node_id, drag.port_id, hit.node_id, hit.port_id);
+                                    } else {
+                                        self.pipewire_handle.createLink(hit.node_id, hit.port_id, drag.node_id, drag.port_id);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        self.port_drag = null;
+                        needs_render = true;
+                    }
                     self.selected_node = null;
                     self.drag_start = null;
                 }
@@ -626,6 +683,7 @@ pub const App = struct {
 
                 if (self.wayland_handle.state.input.key_escape) |key_escape| {
                     if (key_escape == .PRESSED) {
+                        self.port_drag = null;
                         var node_it = self.pipewire_handle.nodes.iterator();
                         while (node_it.next()) |*node| {
                             var port_it = node.value_ptr.outs.iterator();
@@ -780,6 +838,38 @@ pub const App = struct {
                             self.allocator,
                             self.pipewire_handle.nodes,
                             &bezier_vertices,
+                        );
+                    }
+
+                    // Append preview bezier for port drag
+                    if (self.port_drag) |drag| {
+                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                        const mouse_world = [2]f32{
+                            (mouse_x / self.scale) + self.camera_pos[0],
+                            (mouse_y / self.scale) + self.camera_pos[1],
+                        };
+
+                        const p0 = if (drag.is_output) drag.anchor else mouse_world;
+                        const p3 = if (drag.is_output) mouse_world else drag.anchor;
+                        const offset = @abs(p3[0] - p0[0]) / 2.0;
+                        const p1 = [2]f32{ p0[0] + offset, p0[1] };
+                        const p2 = [2]f32{ p3[0] - offset, p3[1] };
+                        const gray = [4]f32{ 0.7, 0.7, 0.7, 0.8 };
+
+                        try types.BezierVertex.append(
+                            self.allocator,
+                            &bezier_vertices,
+                            4.0,
+                            10.0,
+                            gray,
+                            gray,
+                            false,
+                            p0,
+                            p1,
+                            p2,
+                            p3,
+                            1.0,
                         );
                     }
 

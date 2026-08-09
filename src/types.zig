@@ -838,6 +838,53 @@ pub const PipewireNode = struct {
         }
     }
 
+    pub const PortHit = struct {
+        node_id: u32,
+        port_id: u32,
+        visual_index: usize,
+        is_output: bool,
+        center: [2]f32,
+    };
+
+    /// Hit-test all ports of this node against world-space coordinates
+    pub fn hitTestPort(self: PipewireNode, wx: f32, wy: f32) ?PortHit {
+        const node_x = self.x orelse return null;
+        const node_y = self.y orelse return null;
+
+        // Test input ports (left side)
+        for (0..self.inps.count()) |i| {
+            const px = node_x;
+            const py = node_y + H_OFFSET_TITLE + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
+            if (wx >= px and wx <= px + W_PIN and wy >= py and wy <= py + H_PIN) {
+                return .{
+                    .node_id = self.node_id,
+                    .port_id = self.inps.keys()[i],
+                    .visual_index = i,
+                    .is_output = false,
+                    .center = .{ self.getInpPortX(i), self.getInpPortY(i) },
+                };
+            }
+        }
+
+        // Test output ports (right side)
+        const w_beg = W_NODE - W_PIN;
+        for (0..self.outs.count()) |i| {
+            const px = node_x + w_beg;
+            const py = node_y + H_OFFSET_TITLE + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
+            if (wx >= px and wx <= px + W_PIN and wy >= py and wy <= py + H_PIN) {
+                return .{
+                    .node_id = self.node_id,
+                    .port_id = self.outs.keys()[i],
+                    .visual_index = i,
+                    .is_output = true,
+                    .center = .{ self.getOutPortX(i), self.getOutPortY(i) },
+                };
+            }
+        }
+
+        return null;
+    }
+
     pub fn getInpPortVisualIndex(self: PipewireNode, port_id: u32) ?usize {
         var it = self.inps.iterator();
         var i: usize = 0;
