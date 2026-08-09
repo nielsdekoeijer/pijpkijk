@@ -72,6 +72,7 @@ pub const App = struct {
     camera_pos: [2]f32,
     scale: f32,
     selected_node: ?usize,
+    drag_start: ?[2]f32 = null,
 
     const version = "0.1.0";
     const name = "pijpkijk";
@@ -539,31 +540,56 @@ pub const App = struct {
                             needs_render = true;
                         }
                     } else {
-                        var it = self.pipewire_handle.nodes.iterator();
-                        while (it.next()) |entry| {
-                            try entry.value_ptr.markNearbyLinks(
-                                self.pipewire_handle.nodes,
-                                [_]f32{ world_x, world_y },
-                            );
-
-                            const n = entry.value_ptr;
-                            if (n.x) |nx| {
-                                if (n.y) |ny| {
-                                    const w = types.PipewireNode.W_NODE;
-                                    const h = n.computeNodeHeight();
-                                    if (world_x >= nx and world_x <= nx + w and
-                                        world_y >= ny and world_y <= ny + h)
-                                    {
-                                        self.selected_node = entry.key_ptr.*;
-                                        break;
+                        // First frame of drag: try to pick a node, otherwise start region select
+                        if (self.drag_start == null) {
+                            var hit_node = false;
+                            var it = self.pipewire_handle.nodes.iterator();
+                            while (it.next()) |entry| {
+                                const n = entry.value_ptr;
+                                if (n.x) |nx| {
+                                    if (n.y) |ny| {
+                                        const w = types.PipewireNode.W_NODE;
+                                        const h = n.computeNodeHeight();
+                                        if (world_x >= nx and world_x <= nx + w and
+                                            world_y >= ny and world_y <= ny + h)
+                                        {
+                                            self.selected_node = entry.key_ptr.*;
+                                            hit_node = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
+
+                            if (!hit_node) {
+                                self.drag_start = .{ world_x, world_y };
+                            }
+                        }
+
+                        // Active region select: mark links within the rectangle
+                        if (self.drag_start) |start| {
+                            const min_x = @min(start[0], world_x);
+                            const max_x = @max(start[0], world_x);
+                            const min_y = @min(start[1], world_y);
+                            const max_y = @max(start[1], world_y);
+
+                            var it = self.pipewire_handle.nodes.iterator();
+                            while (it.next()) |entry| {
+                                try entry.value_ptr.markLinksInRegion(
+                                    self.pipewire_handle.nodes,
+                                    min_x,
+                                    min_y,
+                                    max_x,
+                                    max_y,
+                                );
+                            }
+                            needs_render = true;
                         }
                     }
                 } else {
                     // Let go of the node on release
                     self.selected_node = null;
+                    self.drag_start = null;
                 }
 
                 if (self.wayland_handle.state.input.key_q) |key_q| {
@@ -699,6 +725,7 @@ pub const App = struct {
                 // Update QuadVertex buffers for our nodes
                 var quad_vertices = try std.ArrayList(types.QuadVertex).initCapacity(self.allocator, 0);
                 defer quad_vertices.deinit(self.allocator);
+                var overlay_vertex_count: u32 = 0;
                 {
                     {
                         var node_it = self.pipewire_handle.nodes.iterator();
@@ -712,6 +739,27 @@ pub const App = struct {
                             try node.value_ptr.appendVerticesPorts(self.allocator, &quad_vertices);
                         }
                     }
+
+                    const scene_vertex_count = quad_vertices.items.len;
+
+                    // Selection rectangle (appended after scene quads, drawn separately)
+                    if (self.drag_start) |start| {
+                        if (self.wayland_handle.state.input.mouse_x) |mx| {
+                            if (self.wayland_handle.state.input.mouse_y) |my| {
+                                const world_ex = (mx / self.scale) + self.camera_pos[0];
+                                const world_ey = (my / self.scale) + self.camera_pos[1];
+                                const rx = @min(start[0], world_ex);
+                                const ry = @min(start[1], world_ey);
+                                const rw = @abs(world_ex - start[0]);
+                                const rh = @abs(world_ey - start[1]);
+                                const select_color = [4]f32{ 0.4, 0.6, 1.0, 0.25 };
+                                const select_radii = [4]f32{ 0.0, 0.0, 0.0, 0.0 };
+                                try types.QuadVertex.append(self.allocator, &quad_vertices, rx, ry, 1.0, rw, rh, select_color, select_radii);
+                            }
+                        }
+                    }
+
+                    overlay_vertex_count = @intCast(quad_vertices.items.len - scene_vertex_count);
 
                     // TODO: this is ugly as sin, and its because our use of anyopque
                     if (quad_vertices.items.len > 0) {
@@ -797,7 +845,8 @@ pub const App = struct {
                     .extent = self.swap_extent,
                 });
 
-                if (quad_vertices.items.len > 0) {
+                const scene_quad_count: u32 = @intCast(quad_vertices.items.len - overlay_vertex_count);
+                if (scene_quad_count > 0) {
                     const offsets = [_]c.VkDeviceSize{0};
                     c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
                     c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
@@ -812,7 +861,7 @@ pub const App = struct {
                         null,
                     );
 
-                    c.vkCmdDraw(cmd, @intCast(quad_vertices.items.len), 1, 0, 0);
+                    c.vkCmdDraw(cmd, scene_quad_count, 1, 0, 0);
                 }
 
                 if (bezier_vertices.items.len > 0) {
@@ -849,6 +898,25 @@ pub const App = struct {
                     );
 
                     c.vkCmdDraw(cmd, @intCast(text_vertices.items.len), 1, 0, 0);
+                }
+
+                // Draw selection overlay last so it doesn't write depth over scene content
+                if (overlay_vertex_count > 0) {
+                    const offsets = [_]c.VkDeviceSize{0};
+                    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.quad_vertex_graphics_pipeline);
+                    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.quad_vertex_buffer_set.vkBuffers[current_frame], &offsets);
+                    c.vkCmdBindDescriptorSets(
+                        cmd,
+                        c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        self.pipeline_layout,
+                        0,
+                        1,
+                        &self.descriptor_sets[current_frame],
+                        0,
+                        null,
+                    );
+
+                    c.vkCmdDraw(cmd, overlay_vertex_count, 1, scene_quad_count, 0);
                 }
 
                 c.vkCmdEndRenderPass(cmd);

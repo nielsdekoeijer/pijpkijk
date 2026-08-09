@@ -207,7 +207,7 @@ pub const QuadVertex = extern struct {
 
     /// Helper function to append a quad of a solid color to a list of vertices
     /// TODO: this whole structure is super inefficient, note how we are copying color, hs and radii many times?
-    fn append(
+    pub fn append(
         allocator: std.mem.Allocator,
         list: *std.ArrayListUnmanaged(QuadVertex),
         x: f32,
@@ -795,6 +795,45 @@ pub const PipewireNode = struct {
                 if (dist < 10.0) {
                     link_entry.value_ptr.is_selected = true;
                 }
+            }
+        }
+    }
+
+    pub fn markLinksInRegion(
+        self: PipewireNode,
+        other_nodes: std.AutoArrayHashMapUnmanaged(u32, PipewireNode),
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+    ) !void {
+        var self_node_index: usize = 0;
+        var it = self.outs.iterator();
+        while (it.next()) |out_entry| : (self_node_index += 1) {
+            const out_port = out_entry.value_ptr.*;
+            var link_it = out_port.connections.iterator();
+
+            while (link_it.next()) |*link_entry| {
+                const link = link_entry.value_ptr.*;
+                const other = other_nodes.get(link.node_id) orelse continue;
+                const other_node_index = other.getInpPortVisualIndex(link.port_id) orelse return error.PipewireError;
+                const bbox = self.computeBezierBoundingBox(self_node_index, other, other_node_index);
+
+                // Sample the bezier curve and check if any point falls within the region
+                var found = false;
+                const steps: usize = 20;
+                for (0..steps + 1) |step| {
+                    const t = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(steps));
+                    const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+                    if (point[0] >= min_x and point[0] <= max_x and
+                        point[1] >= min_y and point[1] <= max_y)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                link_entry.value_ptr.is_selected = found;
             }
         }
     }
