@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.0
+
+DPI scaling, selection UX, and graph layout improvements.
+
+- Fractional DPI scaling via wp_fractional_scale_v1 protocol
+- Shift-extend region selection (hold shift to add to selection)
+- Graceful handling of cyclical PipeWire graph dependencies
+
 ## v0.3.0
 
 Layout, selection, and bug fixes.
