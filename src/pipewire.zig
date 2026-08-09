@@ -660,7 +660,10 @@ pub const PipewireHandle = struct {
         var x_current: f32 = 0;
         var y_current: f32 = 0;
 
-        // First pass: draw the nodes that have NO connections in the first column
+        // First pass: place unconnected nodes that have NO input ports in the first column.
+        // Unconnected nodes WITH input ports are deferred to the last column.
+        var deferred_sink_nodes: std.ArrayListUnmanaged(u32) = .empty;
+        defer deferred_sink_nodes.deinit(self.allocator);
         {
             var node_it = self.nodes.iterator();
             while (node_it.next()) |*node| {
@@ -681,6 +684,12 @@ pub const PipewireHandle = struct {
                 }
 
                 if (inp_count == 0 and out_count == 0) {
+                    if (node.value_ptr.inps.count() > 0) {
+                        // Has input ports but no connections — defer to last column
+                        try deferred_sink_nodes.append(self.allocator, node.value_ptr.node_id);
+                        continue;
+                    }
+
                     node.value_ptr.x = x_current;
                     node.value_ptr.y = y_current;
 
@@ -802,6 +811,22 @@ pub const PipewireHandle = struct {
                     std.log.warn("Detected cyclical dependencies in PipeWire graph, halting layout pass", .{});
                     return error.PipewireCyclicalDependency;
                 }
+            }
+        }
+
+        // Last column: place unconnected sink nodes (have input ports but no connections)
+        if (deferred_sink_nodes.items.len > 0) {
+            x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
+            y_current = 0;
+
+            for (deferred_sink_nodes.items) |node_id| {
+                const node = self.nodes.getPtr(node_id).?;
+                node.x = x_current;
+                node.y = y_current;
+                node.z = @floatFromInt(99999 - node.node_id);
+                y_current += node.computeNodeHeight() + types.H_NODE_SPACING;
+
+                try completed.put(self.allocator, node_id, {});
             }
         }
     }
