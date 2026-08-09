@@ -28,6 +28,8 @@
       system:
       let
         # packages for the given system
+        # Note: shader-slang (slangc) comes from nixpkgs, which is pinned via
+        # flake.lock. Updating slangc requires `nix flake update nixpkgs`.
         pkgs = import nixpkgs {
           inherit system;
           overlays = [

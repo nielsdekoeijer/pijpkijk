@@ -202,7 +202,7 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
       sets `LD_LIBRARY_PATH` for vulkan + pipewire from the nix store.
 - [x] **`.github/workflows/release.yml`**: CI release workflow triggered on `v*` tags.
       Installs Nix, runs `nix build`, packages binary into tarball, creates GitHub Release.
-- [ ] Pin `slangc` + `msdf-atlas-gen` in the flake for reproducible artifacts.
+- [x] Pin `slangc` + `msdf-atlas-gen` in the flake for reproducible artifacts.
 - [ ] Rework `build.zig`: generated SPIR-V / atlas flow through `LazyPath` into the Zig
       cache — **never write into `src/`**.
 - [x] Single version source (inject into build; kill the 0.0.0 / 0.1.0 drift).
