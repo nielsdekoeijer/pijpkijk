@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const Io = std.Io;
 const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
@@ -82,7 +83,7 @@ pub const App = struct {
         anchor: [2]f32,
     };
 
-    const version = "0.1.0";
+    const version = build_options.version;
     const name = "pijpkijk";
     const identifier = "com.nielsdekoeijer.pijpkijk";
     const default_width = 800;

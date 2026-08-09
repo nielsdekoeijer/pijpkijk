@@ -77,6 +77,8 @@ fn addWaylandProtocol(
 }
 
 pub fn build(b: *std.Build) void {
+    const version = "0.1.0";
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -151,11 +153,15 @@ pub fn build(b: *std.Build) void {
 
     b.getInstallStep().dependOn(msdf_step);
 
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+
     const mod = b.addModule("pijpkijk", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .link_libc = true,
     });
+    mod.addOptions("build_options", options);
     mod.linkSystemLibrary("wayland-client", .{
         .needed = true,
         .preferred_link_mode = .static,

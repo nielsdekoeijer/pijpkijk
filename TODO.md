@@ -205,7 +205,7 @@ the machinery if the iteration win proves worth the ABI bookkeeping.
 - [ ] Pin `slangc` + `msdf-atlas-gen` in the flake for reproducible artifacts.
 - [ ] Rework `build.zig`: generated SPIR-V / atlas flow through `LazyPath` into the Zig
       cache — **never write into `src/`**.
-- [ ] Single version source (inject into build; kill the 0.0.0 / 0.1.0 drift).
+- [x] Single version source (inject into build; kill the 0.0.0 / 0.1.0 drift).
 - [ ] `.github/workflows/ci.yml` scoped to what CI can test: `zig fmt --check`,
       `zig build`, pure-logic `zig build test`, `nix flake check`.
 

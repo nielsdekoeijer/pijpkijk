@@ -1,6 +1,6 @@
 .{
     .name = .pijpkijk,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x69b2306c5647189b,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
