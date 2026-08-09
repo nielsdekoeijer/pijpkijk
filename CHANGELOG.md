@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0
+
+Layout, selection, and bug fixes.
+
+- Unconnected sink nodes (have inputs, no connections) placed in last column instead of first
+- Re-layout graph automatically when links or nodes are removed
+- Robust thin region selection via segment-AABB intersection
+- Stronger port color burn (0.4 → 0.6)
+- Match selection bezier math to rendering (multi-start N-R, adjusted hit distance)
+- Enlarged help overlay (540x520) with better text spacing
+
 ## v0.2.0
 
 Visual polish and bezier rendering fixes.
