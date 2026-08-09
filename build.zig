@@ -223,6 +223,13 @@ pub fn build(b: *std.Build) void {
         .flags = &[_][]const u8{"-O3"},
     });
 
+    const fractional_scale = addWaylandProtocol(b, "src/protocols/fractional-scale-v1.xml", "fractional-scale-v1-protocol");
+    mod.addIncludePath(fractional_scale.h_dir);
+    mod.addCSourceFile(.{
+        .file = fractional_scale.c,
+        .flags = &[_][]const u8{"-O3"},
+    });
+
     const exe = b.addExecutable(.{
         .name = "pijpkijk",
         .root_module = b.createModule(.{

@@ -485,14 +485,20 @@ pub fn getVkExtentFromWayland(
     errdefer std.log.err("Trying to get extent failed", .{});
 
     defer std.log.debug("Trying to get extent OK", .{});
+
+    // Apply fractional scale: logical size * (scale / 120)
+    const fs = handle.state.fractional_scale;
+    const scaled_w: u32 = @intCast((@as(u64, handle.state.width) * fs + 60) / 120);
+    const scaled_h: u32 = @intCast((@as(u64, handle.state.height) * fs + 60) / 120);
+
     return c.VkExtent2D{
         .width = std.math.clamp(
-            handle.state.width,
+            scaled_w,
             capabilities.minImageExtent.width,
             capabilities.maxImageExtent.width,
         ),
         .height = std.math.clamp(
-            handle.state.height,
+            scaled_h,
             capabilities.minImageExtent.height,
             capabilities.maxImageExtent.height,
         ),

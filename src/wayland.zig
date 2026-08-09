@@ -20,6 +20,8 @@ pub const WaylandHandle = struct {
         height: u32 = 600,
         should_close: bool = false,
         frame_ready: bool = true,
+        /// Fractional scale factor as numerator with denominator 120 (120 = 1.0x)
+        fractional_scale: u32 = 120,
 
         input: struct {
             key_escape: ?KeyState = null,
@@ -56,6 +58,24 @@ pub const WaylandHandle = struct {
 
         pub const listener = c.struct_wl_callback_listener{
             .done = onDone,
+        };
+    };
+
+    pub const FractionalScale = struct {
+        fractional_scale: ?*c.struct_wp_fractional_scale_v1 = null,
+
+        fn onPreferredScale(
+            data: ?*anyopaque,
+            _: ?*c.struct_wp_fractional_scale_v1,
+            scale: u32,
+        ) callconv(.c) void {
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            std.log.info("Fractional scale preferred: {d}/120 = {d:.2}x", .{ scale, @as(f32, @floatFromInt(scale)) / 120.0 });
+            handle.state.fractional_scale = scale;
+        }
+
+        const listener = c.struct_wp_fractional_scale_v1_listener{
+            .preferred_scale = FractionalScale.onPreferredScale,
         };
     };
 
@@ -162,6 +182,7 @@ pub const WaylandHandle = struct {
         compositor: ?*c.struct_wl_compositor = null,
         wm_base: ?*c.struct_xdg_wm_base = null,
         cursor_shape_manager: ?*c.struct_wp_cursor_shape_manager_v1 = null,
+        fractional_scale_manager: ?*c.struct_wp_fractional_scale_manager_v1 = null,
 
         /// We get told what global objects exist
         fn onRegistryGlobal(
@@ -205,6 +226,14 @@ pub const WaylandHandle = struct {
             } else if (std.mem.eql(u8, iface, "wp_cursor_shape_manager_v1")) {
                 handle.registry_global.cursor_shape_manager = @ptrCast(c.wl_registry_bind(registry, id, &c.wp_cursor_shape_manager_v1_interface, 1));
                 if (handle.registry_global.cursor_shape_manager == null) {
+                    std.log.err("Failed to bind interface '{s}' to registry", .{iface});
+                    return error.WaylandError;
+                }
+
+                std.log.info("Bound interface '{s}' to registry", .{iface});
+            } else if (std.mem.eql(u8, iface, "wp_fractional_scale_manager_v1")) {
+                handle.registry_global.fractional_scale_manager = @ptrCast(c.wl_registry_bind(registry, id, &c.wp_fractional_scale_manager_v1_interface, 1));
+                if (handle.registry_global.fractional_scale_manager == null) {
                     std.log.err("Failed to bind interface '{s}' to registry", .{iface});
                     return error.WaylandError;
                 }
@@ -687,6 +716,7 @@ pub const WaylandHandle = struct {
     registry_pointer: RegistryPointer = .{},
     registry_surface: RegistrySurface = .{},
     registry_top_level: RegistryTopLevel = .{},
+    fractional_scale: FractionalScale = .{},
 
     pub fn init(self: *WaylandHandle) !void {
         std.log.info("Trying to init wayland handle...", .{});
@@ -786,6 +816,20 @@ pub const WaylandHandle = struct {
         );
 
         c.xdg_toplevel_set_title(self.registry_top_level.xdg_toplevel, "pijpkijk");
+
+        // Attach fractional scale listener if compositor supports it
+        if (self.registry_global.fractional_scale_manager) |mgr| {
+            self.fractional_scale.fractional_scale = @ptrCast(
+                c.wp_fractional_scale_manager_v1_get_fractional_scale(mgr, self.registry_surface.surface),
+            );
+            if (self.fractional_scale.fractional_scale) |fs| {
+                try handleError(
+                    c.wp_fractional_scale_v1_add_listener(fs, &FractionalScale.listener, self),
+                );
+                std.log.info("Fractional scale listener attached", .{});
+            }
+        }
+
         c.wl_surface_commit(self.registry_surface.surface);
 
         std.log.info("Trying to start wayland surfaces OK", .{});
@@ -806,6 +850,8 @@ pub const WaylandHandle = struct {
         if (self.registry_keyboard.xkb_keymap) |s| c.xkb_keymap_unref(s);
         c.xkb_context_unref(self.core.xkb_context);
 
+        if (self.fractional_scale.fractional_scale) |s| c.wp_fractional_scale_v1_destroy(s);
+        if (self.registry_global.fractional_scale_manager) |s| c.wp_fractional_scale_manager_v1_destroy(s);
         if (self.registry_seat.cursor_shape_device) |s| c.wp_cursor_shape_device_v1_destroy(s);
         if (self.registry_seat.keyboard) |s| c.wl_keyboard_destroy(s);
         if (self.registry_seat.pointer) |s| c.wl_pointer_destroy(s);

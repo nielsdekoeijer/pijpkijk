@@ -76,6 +76,10 @@ pub const App = struct {
     drag_start: ?[2]f32 = null,
     port_drag: ?PortDragState = null,
 
+    fn dpiScale(self: *const App) f32 {
+        return @as(f32, @floatFromInt(self.wayland_handle.state.fractional_scale)) / 120.0;
+    }
+
     const PortDragState = struct {
         node_id: u32,
         port_id: u32,
@@ -711,10 +715,13 @@ pub const App = struct {
             if (needs_render and self.wayland_handle.state.frame_ready) {
                 needs_render = false;
 
-                if (self.swap_extent.width != self.wayland_handle.state.width or
-                    self.swap_extent.height != self.wayland_handle.state.height)
                 {
-                    window_resized = true;
+                    const new_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
+                    if (self.swap_extent.width != new_extent.width or
+                        self.swap_extent.height != new_extent.height)
+                    {
+                        window_resized = true;
+                    }
                 }
 
                 // If window resized, we must recreate the swapchain
@@ -781,7 +788,7 @@ pub const App = struct {
                             @floatFromInt(self.swap_extent.height),
                         },
                         .camera_pos = self.camera_pos,
-                        .scale = self.scale,
+                        .scale = self.scale * self.dpiScale(),
                     };
                 }
 
@@ -825,8 +832,8 @@ pub const App = struct {
                     // Help overlay background
                     if (self.wayland_handle.state.input.key_question) |kq| {
                         if (kq == .PRESSED or kq == .REPEATED) {
-                            const sw: f32 = @floatFromInt(self.swap_extent.width);
-                            const sh: f32 = @floatFromInt(self.swap_extent.height);
+                            const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
+                            const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
                             const overlay_w: f32 = 540.0;
                             const overlay_h: f32 = 520.0;
                             const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
@@ -920,8 +927,8 @@ pub const App = struct {
                     // Help overlay text
                     if (self.wayland_handle.state.input.key_question) |kq| {
                         if (kq == .PRESSED or kq == .REPEATED) {
-                            const sw: f32 = @floatFromInt(self.swap_extent.width);
-                            const sh: f32 = @floatFromInt(self.swap_extent.height);
+                            const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
+                            const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
                             const overlay_w: f32 = 540.0;
                             const overlay_h: f32 = 520.0;
                             const base_x = ((sw - overlay_w) / 2.0 + 30.0) / self.scale + self.camera_pos[0];
