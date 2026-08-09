@@ -41,6 +41,7 @@ pub const WaylandHandle = struct {
             scroll_y: f32 = 0,
             mouse_down_l: bool = false,
             mouse_down_r: bool = false,
+            shift_held: bool = false,
         } = .{},
     };
 
@@ -665,6 +666,7 @@ pub const WaylandHandle = struct {
 
             if (handle.registry_keyboard.xkb_state) |st| {
                 _ = c.xkb_state_update_mask(st, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+                handle.state.input.shift_held = c.xkb_state_mod_name_is_active(st, c.XKB_MOD_NAME_SHIFT, c.XKB_STATE_MODS_EFFECTIVE) > 0;
             }
 
             defer std.log.debug("Handled modifier press", .{});

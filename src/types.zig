@@ -819,6 +819,7 @@ pub const PipewireNode = struct {
         min_y: f32,
         max_x: f32,
         max_y: f32,
+        extend: bool,
     ) !void {
         var self_node_index: usize = 0;
         var it = self.outs.iterator();
@@ -886,7 +887,10 @@ pub const PipewireNode = struct {
                     prev = curr;
                 }
 
-                link_entry.value_ptr.is_selected = found;
+                link_entry.value_ptr.is_selected = if (extend)
+                    link_entry.value_ptr.is_selected or found
+                else
+                    found;
             }
         }
     }

@@ -620,6 +620,7 @@ pub const App = struct {
                                     min_y,
                                     max_x,
                                     max_y,
+                                    self.wayland_handle.state.input.shift_held,
                                 );
                             }
                             needs_render = true;
