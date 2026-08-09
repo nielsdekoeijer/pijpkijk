@@ -483,6 +483,7 @@ pub const TextVertex = extern struct {
         max_w: f32,
         font_size: f32,
         list: *std.ArrayList(TextVertex),
+        color: ?[4]f32,
     ) !void {
         const scale = font_size / atlas.parsed.value.metrics.emSize;
         const atlas_w = @as(f32, @floatFromInt(atlas.parsed.value.atlas.width));
@@ -529,7 +530,7 @@ pub const TextVertex = extern struct {
             .Right => x - measured_w,
         };
         const cursor_y = y;
-        const text_color = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+        const text_color = color orelse [_]f32{ 1.0, 1.0, 1.0, 1.0 };
 
         const dots_to_draw: usize = if (needs_dots) 3 else 0;
         var i: usize = 0;
@@ -654,7 +655,7 @@ pub const PipewireNode = struct {
 
     fn computePortColor(self: PipewireNode, index: usize) [4]f32 {
         const base = self.port_color.?;
-        const burn = 1.0 - 0.8 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computePortSlotCount()));
+        const burn = 1.0 - 0.4 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computePortSlotCount()));
         return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
     }
     /// Grab the x-coordinate of the given input pin
@@ -686,6 +687,14 @@ pub const PipewireNode = struct {
         list: *std.ArrayListUnmanaged(QuadVertex),
     ) !void {
         const H_NODE = self.computeNodeHeight();
+
+        // Border quad (behind fill)
+        const base = self.port_color.?;
+        const border_color: [4]f32 = .{ base[0] * 0.5, base[1] * 0.5, base[2] * 0.5, base[3] };
+        const border_radii: [4]f32 = .{ 12.0, 12.0, 12.0, 12.0 };
+        try QuadVertex.append(allocator, list, self.x.? - 2, self.y.? - 2, self.z.? + 0.4, W_NODE + 4, H_NODE + 4, border_color, border_radii);
+
+        // Fill quad
         const color: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
         const radii: [4]f32 = .{ 10.0, 10.0, 10.0, 10.0 };
         try QuadVertex.append(allocator, list, self.x.?, self.y.?, self.z.? + 0.3, W_NODE, H_NODE, color, radii);
@@ -918,7 +927,7 @@ pub const PipewireNode = struct {
                 H_OFFSET_INNER_PIN + (H_PIN / 2.0),
         };
 
-        const offset = @abs(p3[0] - p0[0]) / 2.0;
+        const offset = @max(@abs(p3[0] - p0[0]) / 2.0, 75.0);
 
         const p1 = [2]f32{
             p0[0] + offset,
@@ -967,8 +976,8 @@ pub const PipewireNode = struct {
                 try BezierVertex.append(
                     allocator,
                     list,
-                    4.0,
-                    10.0,
+                    5.0,
+                    30.0,
                     self.computePortColor(self_node_index),
                     other.computePortColor(other_node_index),
                     link_entry.value_ptr.is_selected,
@@ -976,7 +985,7 @@ pub const PipewireNode = struct {
                     bbox.p1,
                     bbox.p2,
                     bbox.p3,
-                    self.z.? + 0.2,
+                    self.z.? + 0.05,
                 );
             }
         }
@@ -992,6 +1001,15 @@ pub const PipewireNode = struct {
         const title_x = self.x.? + (W_NODE / 2.0);
         const title_y = self.y.? + 30.0;
 
+        // Title: port-colored tint (lerp white toward port color)
+        const pc = self.port_color.?;
+        const title_color = [4]f32{
+            0.5 + 0.5 * pc[0],
+            0.5 + 0.5 * pc[1],
+            0.5 + 0.5 * pc[2],
+            1.0,
+        };
+
         try TextVertex.append(
             allocator,
             atlas,
@@ -1001,8 +1019,9 @@ pub const PipewireNode = struct {
             title_y,
             self.z.? + 0.2,
             title_max_w,
-            16.0,
+            20.0,
             list,
+            title_color,
         );
 
         if (self.mean_runtime_ns) |runtime| {
@@ -1015,11 +1034,12 @@ pub const PipewireNode = struct {
                 runtime_text,
                 .Center,
                 title_x,
-                title_y + 18.0,
+                title_y + 22.0,
                 self.z.? + 0.2,
                 title_max_w,
                 12.0,
                 list,
+                null,
             );
         }
 
@@ -1038,6 +1058,7 @@ pub const PipewireNode = struct {
                 W_NODE / 2.0 - 20.0,
                 10.0,
                 list,
+                null,
             );
         }
 
@@ -1056,8 +1077,11 @@ pub const PipewireNode = struct {
                 W_NODE / 2.0 - 20.0,
                 10.0,
                 list,
+                null,
             );
         }
+
+        const port_label_color = [4]f32{ 1.0, 1.0, 1.0, 0.7 };
 
         {
             var i: usize = 0;
@@ -1078,6 +1102,7 @@ pub const PipewireNode = struct {
                     port_max_w,
                     12.0,
                     list,
+                    port_label_color,
                 );
             }
         }
@@ -1101,6 +1126,7 @@ pub const PipewireNode = struct {
                     port_max_w,
                     12.0,
                     list,
+                    port_label_color,
                 );
             }
         }

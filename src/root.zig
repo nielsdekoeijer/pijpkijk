@@ -815,7 +815,7 @@ pub const App = struct {
                                 const ry = @min(start[1], world_ey);
                                 const rw = @abs(world_ex - start[0]);
                                 const rh = @abs(world_ey - start[1]);
-                                const select_color = [4]f32{ 0.4, 0.6, 1.0, 0.25 };
+                                const select_color = [4]f32{ 0.4, 0.6, 1.0, 0.35 };
                                 const select_radii = [4]f32{ 0.0, 0.0, 0.0, 0.0 };
                                 try types.QuadVertex.append(self.allocator, &quad_vertices, rx, ry, 1.0, rw, rh, select_color, select_radii);
                             }
@@ -833,7 +833,7 @@ pub const App = struct {
                             const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
                             const ow = overlay_w / self.scale;
                             const oh = overlay_h / self.scale;
-                            try types.QuadVertex.append(self.allocator, &quad_vertices, ox, oy, 1.0, ow, oh, .{ 0.1, 0.1, 0.1, 0.85 }, .{ 10.0, 10.0, 10.0, 10.0 });
+                            try types.QuadVertex.append(self.allocator, &quad_vertices, ox, oy, 1.0, ow, oh, .{ 0.15, 0.15, 0.15, 0.92 }, .{ 10.0, 10.0, 10.0, 10.0 });
                         }
                     }
 
@@ -932,7 +932,7 @@ pub const App = struct {
                             const max_w: f32 = (overlay_w - 60.0) / self.scale;
 
                             var cy = base_y;
-                            try types.TextVertex.append(self.allocator, self.font_atlas, "Keyboard Shortcuts", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices);
+                            try types.TextVertex.append(self.allocator, self.font_atlas, "Keyboard Shortcuts", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices, null);
                             cy += line_h * 1.8;
 
                             const help_lines = [_][2][]const u8{
@@ -944,13 +944,13 @@ pub const App = struct {
                             };
 
                             for (help_lines) |line| {
-                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices);
-                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices, null);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices, null);
                                 cy += line_h;
                             }
 
                             cy += line_h * 0.8;
-                            try types.TextVertex.append(self.allocator, self.font_atlas, "Mouse", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices);
+                            try types.TextVertex.append(self.allocator, self.font_atlas, "Mouse", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices, null);
                             cy += line_h * 1.5;
 
                             const mouse_lines = [_][2][]const u8{
@@ -962,8 +962,8 @@ pub const App = struct {
                             };
 
                             for (mouse_lines) |line| {
-                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices);
-                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices, null);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices, null);
                                 cy += line_h;
                             }
                         }

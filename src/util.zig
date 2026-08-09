@@ -1744,7 +1744,7 @@ pub fn initBezierVertexVkGraphicsPipeline(
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
-                .depthTestEnable = c.VK_TRUE,
+                .depthTestEnable = c.VK_FALSE,
                 .depthWriteEnable = c.VK_FALSE,
                 .depthCompareOp = c.VK_COMPARE_OP_LESS_OR_EQUAL,
                 .depthBoundsTestEnable = c.VK_FALSE,
