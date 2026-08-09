@@ -809,10 +809,22 @@ pub const PipewireHandle = struct {
                 }
 
                 // If no nodes were placed this pass, there is a cyclical dependency (feedback loop)
-                // We break to prevent hanging the Wayland loop.
+                // Place all remaining nodes in the next column and break.
                 if (completed.count() == completed_start_size) {
-                    std.log.warn("Detected cyclical dependencies in PipeWire graph, halting layout pass", .{});
-                    return error.PipewireCyclicalDependency;
+                    std.log.warn("Detected cyclical dependencies in PipeWire graph, placing remaining nodes", .{});
+                    x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
+                    y_current = 0;
+
+                    var remaining_it = self.nodes.iterator();
+                    while (remaining_it.next()) |*remaining| {
+                        if (completed.contains(remaining.value_ptr.node_id)) continue;
+                        remaining.value_ptr.x = x_current;
+                        remaining.value_ptr.y = y_current;
+                        remaining.value_ptr.z = @floatFromInt(99999 - remaining.value_ptr.node_id);
+                        y_current += remaining.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
+                        try completed.put(self.allocator, remaining.value_ptr.node_id, {});
+                    }
+                    break;
                 }
             }
         }
