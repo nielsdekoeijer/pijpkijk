@@ -681,6 +681,10 @@ pub const App = struct {
                     }
                 }
 
+                if (self.wayland_handle.state.input.key_question) |_| {
+                    needs_render = true;
+                }
+
                 if (self.wayland_handle.state.input.key_escape) |key_escape| {
                     if (key_escape == .PRESSED) {
                         self.port_drag = null;
@@ -817,6 +821,21 @@ pub const App = struct {
                         }
                     }
 
+                    // Help overlay background
+                    if (self.wayland_handle.state.input.key_question) |kq| {
+                        if (kq == .PRESSED or kq == .REPEATED) {
+                            const sw: f32 = @floatFromInt(self.swap_extent.width);
+                            const sh: f32 = @floatFromInt(self.swap_extent.height);
+                            const overlay_w: f32 = 420.0;
+                            const overlay_h: f32 = 440.0;
+                            const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
+                            const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
+                            const ow = overlay_w / self.scale;
+                            const oh = overlay_h / self.scale;
+                            try types.QuadVertex.append(self.allocator, &quad_vertices, ox, oy, 1.0, ow, oh, .{ 0.1, 0.1, 0.1, 0.85 }, .{ 10.0, 10.0, 10.0, 10.0 });
+                        }
+                    }
+
                     overlay_vertex_count = @intCast(quad_vertices.items.len - scene_vertex_count);
 
                     // TODO: this is ugly as sin, and its because our use of anyopque
@@ -895,6 +914,58 @@ pub const App = struct {
                     var node_it = self.pipewire_handle.nodes.iterator();
                     while (node_it.next()) |node| {
                         try node.value_ptr.appendVerticesText(self.allocator, self.font_atlas, &text_vertices);
+                    }
+
+                    // Help overlay text
+                    if (self.wayland_handle.state.input.key_question) |kq| {
+                        if (kq == .PRESSED or kq == .REPEATED) {
+                            const sw: f32 = @floatFromInt(self.swap_extent.width);
+                            const sh: f32 = @floatFromInt(self.swap_extent.height);
+                            const overlay_w: f32 = 420.0;
+                            const overlay_h: f32 = 440.0;
+                            const base_x = ((sw - overlay_w) / 2.0 + 30.0) / self.scale + self.camera_pos[0];
+                            const base_y = ((sh - overlay_h) / 2.0 + 30.0) / self.scale + self.camera_pos[1];
+                            const line_h: f32 = 24.0 / self.scale;
+                            const fs_title: f32 = 28.0 / self.scale;
+                            const fs: f32 = 20.0 / self.scale;
+                            const max_w: f32 = (overlay_w - 60.0) / self.scale;
+
+                            var cy = base_y;
+                            try types.TextVertex.append(self.allocator, self.font_atlas, "Keyboard Shortcuts", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices);
+                            cy += line_h * 1.8;
+
+                            const help_lines = [_][2][]const u8{
+                                .{ "?", "Show this help" },
+                                .{ "Q", "Quit" },
+                                .{ "R", "Re-layout graph" },
+                                .{ "Delete", "Delete selected connections" },
+                                .{ "Escape", "Deselect / cancel drag" },
+                            };
+
+                            for (help_lines) |line| {
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices);
+                                cy += line_h;
+                            }
+
+                            cy += line_h * 0.8;
+                            try types.TextVertex.append(self.allocator, self.font_atlas, "Mouse", .Left, base_x, cy, 1.0, max_w, fs_title, &text_vertices);
+                            cy += line_h * 1.5;
+
+                            const mouse_lines = [_][2][]const u8{
+                                .{ "Drag port", "Create connection" },
+                                .{ "Drag node", "Move node" },
+                                .{ "Drag empty", "Region select" },
+                                .{ "Right drag", "Pan camera" },
+                                .{ "Scroll", "Zoom" },
+                            };
+
+                            for (mouse_lines) |line| {
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[0], .Left, base_x, cy, 1.0, max_w, fs, &text_vertices);
+                                try types.TextVertex.append(self.allocator, self.font_atlas, line[1], .Left, base_x + 160.0 / self.scale, cy, 1.0, max_w, fs, &text_vertices);
+                                cy += line_h;
+                            }
+                        }
                     }
 
                     const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(

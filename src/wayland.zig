@@ -30,6 +30,7 @@ pub const WaylandHandle = struct {
             key_q: ?KeyState = null,
             key_r: ?KeyState = null,
             key_delete: ?KeyState = null,
+            key_question: ?KeyState = null,
 
             mouse_x: ?f32 = null,
             mouse_y: ?f32 = null,
@@ -610,6 +611,7 @@ pub const WaylandHandle = struct {
                     c.XKB_KEY_q => handle.state.input.key_q = val,
                     c.XKB_KEY_r => handle.state.input.key_r = val,
                     c.XKB_KEY_Delete => handle.state.input.key_delete = val,
+                    c.XKB_KEY_question => handle.state.input.key_question = val,
                     else => {},
                 }
             }
