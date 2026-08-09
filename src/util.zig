@@ -481,11 +481,6 @@ pub fn getVkExtentFromWayland(
     handle: *WaylandHandle,
     capabilities: c.VkSurfaceCapabilitiesKHR,
 ) c.VkExtent2D {
-    std.log.debug("Trying to get extent...", .{});
-    errdefer std.log.err("Trying to get extent failed", .{});
-
-    defer std.log.debug("Trying to get extent OK", .{});
-
     // Apply fractional scale: logical size * (scale / 120)
     const fs = handle.state.fractional_scale;
     const scaled_w: u32 = @intCast((@as(u64, handle.state.width) * fs + 60) / 120);
