@@ -757,5 +757,8 @@ pub const PipewireHandle = struct {
         }
 
         self.nodes.deinit(self.allocator);
+        self.pipewire_nodes.deinit(self.allocator);
+        self.pipewire_links.deinit(self.allocator);
+        self.pipewire_ports.deinit(self.allocator);
     }
 };

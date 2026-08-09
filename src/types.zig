@@ -591,10 +591,18 @@ pub const H_NODE_SPACING: f32 = 100.0;
 /// Width spacing between nodes
 pub const W_NODE_SPACING: f32 = 300.0;
 
+/// Pipewire latency in samples
+pub const PipewireLatency = struct {
+    min: u32,
+    max: u32,
+};
+
 pub const PipewireNode = struct {
     name: []const u8,
     node_id: u32,
     mean_runtime_ns: ?f32,
+    upstream: ?PipewireLatency = null,
+    downstream: ?PipewireLatency = null,
     inps: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
     outs: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
 
@@ -611,7 +619,7 @@ pub const PipewireNode = struct {
     pub const W_NODE: f32 = 400.0;
 
     /// Height reserved for the the title of the node
-    pub const H_OFFSET_TITLE: f32 = 50.0;
+    pub const H_OFFSET_TITLE: f32 = 76.0;
 
     /// Width reserved for the the title of the node
     pub const W_OFFSET_TITLE: f32 = 0.0;
