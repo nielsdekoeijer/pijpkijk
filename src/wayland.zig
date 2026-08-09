@@ -160,6 +160,7 @@ pub const WaylandHandle = struct {
         seat: ?*c.struct_wl_seat = null,
         compositor: ?*c.struct_wl_compositor = null,
         wm_base: ?*c.struct_xdg_wm_base = null,
+        shm: ?*c.struct_wl_shm = null,
 
         /// We get told what global objects exist
         fn onRegistryGlobal(
@@ -198,6 +199,14 @@ pub const WaylandHandle = struct {
                 try handleError(
                     c.xdg_wm_base_add_listener(handle.registry_global.wm_base, &WaylandHandle.RegistryWmBase.listener, handle),
                 );
+
+                std.log.info("Bound interface '{s}' to registry", .{iface});
+            } else if (std.mem.eql(u8, iface, "wl_shm")) {
+                handle.registry_global.shm = @ptrCast(c.wl_registry_bind(registry, id, &c.wl_shm_interface, 1));
+                if (handle.registry_global.shm == null) {
+                    std.log.err("Failed to bind interface '{s}' to registry", .{iface});
+                    return error.WaylandError;
+                }
 
                 std.log.info("Bound interface '{s}' to registry", .{iface});
             } else if (std.mem.eql(u8, iface, "wl_seat")) {
@@ -300,12 +309,23 @@ pub const WaylandHandle = struct {
             surface_x: c.wl_fixed_t,
             surface_y: c.wl_fixed_t,
         ) callconv(.c) void {
-            _ = data;
-            _ = pointer;
-            _ = serial;
             _ = surface;
             _ = surface_x;
             _ = surface_y;
+
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+
+            if (handle.cursor_theme) |theme| {
+                if (handle.cursor_surface) |cursor_surface| {
+                    const cursor = c.wl_cursor_theme_get_cursor(theme, "default") orelse return;
+                    const image = cursor.*.images[0];
+                    const buffer = c.wl_cursor_image_get_buffer(image);
+                    c.wl_surface_attach(cursor_surface, buffer, 0, 0);
+                    c.wl_surface_damage(cursor_surface, 0, 0, @intCast(image.*.width), @intCast(image.*.height));
+                    c.wl_surface_commit(cursor_surface);
+                    c.wl_pointer_set_cursor(pointer, serial, cursor_surface, @intCast(image.*.hotspot_x), @intCast(image.*.hotspot_y));
+                }
+            }
         }
 
         /// When the mouse enters the window
@@ -665,6 +685,8 @@ pub const WaylandHandle = struct {
     registry_pointer: RegistryPointer = .{},
     registry_surface: RegistrySurface = .{},
     registry_top_level: RegistryTopLevel = .{},
+    cursor_theme: ?*c.struct_wl_cursor_theme = null,
+    cursor_surface: ?*c.struct_wl_surface = null,
 
     pub fn init(self: *WaylandHandle) !void {
         std.log.info("Trying to init wayland handle...", .{});
@@ -766,6 +788,22 @@ pub const WaylandHandle = struct {
         c.xdg_toplevel_set_title(self.registry_top_level.xdg_toplevel, "pijpkijk");
         c.wl_surface_commit(self.registry_surface.surface);
 
+        // Load cursor theme and create cursor surface, respecting system settings
+        if (self.registry_global.shm) |shm| {
+            const theme_name: ?[*:0]const u8 = @ptrCast(c.getenv("XCURSOR_THEME"));
+            const cursor_size: c_int = blk: {
+                const size_str: ?[*:0]const u8 = @ptrCast(c.getenv("XCURSOR_SIZE"));
+                if (size_str) |s| {
+                    break :blk std.fmt.parseInt(c_int, std.mem.span(s), 10) catch 24;
+                }
+                break :blk 24;
+            };
+            self.cursor_theme = c.wl_cursor_theme_load(theme_name, cursor_size, shm);
+            if (self.cursor_theme != null) {
+                self.cursor_surface = c.wl_compositor_create_surface(self.registry_global.compositor);
+            }
+        }
+
         std.log.info("Trying to start wayland surfaces OK", .{});
     }
 
@@ -784,6 +822,8 @@ pub const WaylandHandle = struct {
         if (self.registry_keyboard.xkb_keymap) |s| c.xkb_keymap_unref(s);
         c.xkb_context_unref(self.core.xkb_context);
 
+        if (self.cursor_surface) |s| c.wl_surface_destroy(s);
+        if (self.cursor_theme) |s| c.wl_cursor_theme_destroy(s);
         if (self.registry_seat.keyboard) |s| c.wl_keyboard_destroy(s);
         if (self.registry_seat.pointer) |s| c.wl_pointer_destroy(s);
         if (self.registry_global.seat) |s| c.wl_seat_destroy(s);
@@ -791,6 +831,7 @@ pub const WaylandHandle = struct {
         if (self.registry_surface.xdg_surface) |s| c.xdg_surface_destroy(s);
         if (self.registry_surface.surface) |s| c.wl_surface_destroy(s);
         if (self.registry_global.wm_base) |s| c.xdg_wm_base_destroy(s);
+        if (self.registry_global.shm) |s| c.wl_shm_destroy(s);
         if (self.registry_global.compositor) |s| c.wl_compositor_destroy(s);
 
         c.wl_registry_destroy(self.core.registry);

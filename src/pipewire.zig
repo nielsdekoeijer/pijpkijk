@@ -823,6 +823,7 @@ pub const PipewireHandle = struct {
             .{ .key = c.PW_KEY_LINK_OUTPUT_PORT, .value = out_port_str.ptr },
             .{ .key = c.PW_KEY_LINK_INPUT_NODE, .value = inp_node_str.ptr },
             .{ .key = c.PW_KEY_LINK_INPUT_PORT, .value = inp_port_str.ptr },
+            .{ .key = c.PW_KEY_OBJECT_LINGER, .value = "true" },
         };
 
         const props = c.spa_dict{

@@ -5,6 +5,7 @@ pub const c = @cImport({
     // Wayland
     @cInclude("wayland-client.h");
     @cInclude("wayland-client-protocol.h");
+    @cInclude("wayland-cursor.h");
     @cInclude("xdg-shell-protocol.h");
     @cInclude("sys/mman.h");
     @cInclude("unistd.h");
