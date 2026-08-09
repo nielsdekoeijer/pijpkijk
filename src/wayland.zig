@@ -160,6 +160,7 @@ pub const WaylandHandle = struct {
         seat: ?*c.struct_wl_seat = null,
         compositor: ?*c.struct_wl_compositor = null,
         wm_base: ?*c.struct_xdg_wm_base = null,
+        cursor_shape_manager: ?*c.struct_wp_cursor_shape_manager_v1 = null,
 
         /// We get told what global objects exist
         fn onRegistryGlobal(
@@ -198,6 +199,14 @@ pub const WaylandHandle = struct {
                 try handleError(
                     c.xdg_wm_base_add_listener(handle.registry_global.wm_base, &WaylandHandle.RegistryWmBase.listener, handle),
                 );
+
+                std.log.info("Bound interface '{s}' to registry", .{iface});
+            } else if (std.mem.eql(u8, iface, "wp_cursor_shape_manager_v1")) {
+                handle.registry_global.cursor_shape_manager = @ptrCast(c.wl_registry_bind(registry, id, &c.wp_cursor_shape_manager_v1_interface, 1));
+                if (handle.registry_global.cursor_shape_manager == null) {
+                    std.log.err("Failed to bind interface '{s}' to registry", .{iface});
+                    return error.WaylandError;
+                }
 
                 std.log.info("Bound interface '{s}' to registry", .{iface});
             } else if (std.mem.eql(u8, iface, "wl_seat")) {
@@ -239,6 +248,7 @@ pub const WaylandHandle = struct {
     pub const RegistrySeat = struct {
         pointer: ?*c.struct_wl_pointer = null,
         keyboard: ?*c.struct_wl_keyboard = null,
+        cursor_shape_device: ?*c.struct_wp_cursor_shape_device_v1 = null,
 
         /// We are told what input devices are availible
         fn onSeatCapabilities(
@@ -261,6 +271,13 @@ pub const WaylandHandle = struct {
                 try handleError(
                     c.wl_pointer_add_listener(handle.registry_seat.pointer, &RegistryPointer.listener, handle),
                 );
+
+                // Get cursor shape device if the manager is available
+                if (handle.registry_global.cursor_shape_manager) |mgr| {
+                    handle.registry_seat.cursor_shape_device = @ptrCast(
+                        c.wp_cursor_shape_manager_v1_get_pointer(mgr, handle.registry_seat.pointer),
+                    );
+                }
             }
 
             if ((capabilities & c.WL_SEAT_CAPABILITY_KEYBOARD) != 0 and handle.registry_seat.keyboard == null) {
@@ -291,7 +308,7 @@ pub const WaylandHandle = struct {
     };
 
     pub const RegistryPointer = struct {
-        /// When the mouse enters the window
+        /// When the mouse enters the window, request the default cursor shape
         fn onEnter(
             data: ?*anyopaque,
             pointer: ?*c.struct_wl_pointer,
@@ -300,14 +317,15 @@ pub const WaylandHandle = struct {
             surface_x: c.wl_fixed_t,
             surface_y: c.wl_fixed_t,
         ) callconv(.c) void {
-            _ = data;
             _ = pointer;
-            _ = serial;
             _ = surface;
             _ = surface_x;
             _ = surface_y;
-            // Not calling wl_pointer_set_cursor lets the compositor
-            // keep its own cursor (e.g. the theme set via hyprctl setcursor).
+
+            const handle: *WaylandHandle = @ptrCast(@alignCast(data));
+            if (handle.registry_seat.cursor_shape_device) |device| {
+                c.wp_cursor_shape_device_v1_set_shape(device, serial, c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
+            }
         }
 
         /// When the mouse enters the window
@@ -786,8 +804,10 @@ pub const WaylandHandle = struct {
         if (self.registry_keyboard.xkb_keymap) |s| c.xkb_keymap_unref(s);
         c.xkb_context_unref(self.core.xkb_context);
 
+        if (self.registry_seat.cursor_shape_device) |s| c.wp_cursor_shape_device_v1_destroy(s);
         if (self.registry_seat.keyboard) |s| c.wl_keyboard_destroy(s);
         if (self.registry_seat.pointer) |s| c.wl_pointer_destroy(s);
+        if (self.registry_global.cursor_shape_manager) |s| c.wp_cursor_shape_manager_v1_destroy(s);
         if (self.registry_global.seat) |s| c.wl_seat_destroy(s);
         if (self.registry_top_level.xdg_toplevel) |s| c.xdg_toplevel_destroy(s);
         if (self.registry_surface.xdg_surface) |s| c.xdg_surface_destroy(s);

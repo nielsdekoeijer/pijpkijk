@@ -205,6 +205,13 @@ pub fn build(b: *std.Build) void {
         .flags = &[_][]const u8{"-O3"},
     });
 
+    const cursor_shape = addWaylandProtocol(b, "src/protocols/cursor-shape-v1.xml", "cursor-shape-v1-protocol");
+    mod.addIncludePath(cursor_shape.h_dir);
+    mod.addCSourceFile(.{
+        .file = cursor_shape.c,
+        .flags = &[_][]const u8{"-O3"},
+    });
+
     const exe = b.addExecutable(.{
         .name = "pijpkijk",
         .root_module = b.createModule(.{
