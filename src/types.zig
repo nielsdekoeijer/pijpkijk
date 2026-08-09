@@ -655,7 +655,7 @@ pub const PipewireNode = struct {
 
     fn computePortColor(self: PipewireNode, index: usize) [4]f32 {
         const base = self.port_color.?;
-        const burn = 1.0 - 0.4 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computePortSlotCount()));
+        const burn = 1.0 - 0.6 * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(self.computePortSlotCount()));
         return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
     }
     /// Grab the x-coordinate of the given input pin
@@ -832,18 +832,58 @@ pub const PipewireNode = struct {
                 const other_node_index = other.getInpPortVisualIndex(link.port_id) orelse return error.PipewireError;
                 const bbox = self.computeBezierBoundingBox(self_node_index, other, other_node_index);
 
-                // Sample the bezier curve and check if any point falls within the region
+                // Sample the bezier curve and check if it intersects the region
+                // Uses segment-AABB intersection between consecutive samples
+                // so thin rects can't be stepped over
                 var found = false;
-                const steps: usize = 40;
-                for (0..steps + 1) |step| {
+                const steps: usize = 64;
+                var prev = getBezierPoint(0.0, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+                for (1..steps + 1) |step| {
                     const t = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(steps));
-                    const point = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
-                    if (point[0] >= min_x and point[0] <= max_x and
-                        point[1] >= min_y and point[1] <= max_y)
+                    const curr = getBezierPoint(t, bbox.p0, bbox.p1, bbox.p2, bbox.p3);
+
+                    // Check if either endpoint is inside the rect
+                    if ((curr[0] >= min_x and curr[0] <= max_x and
+                        curr[1] >= min_y and curr[1] <= max_y) or
+                        (prev[0] >= min_x and prev[0] <= max_x and
+                        prev[1] >= min_y and prev[1] <= max_y))
                     {
                         found = true;
                         break;
                     }
+
+                    // Check segment-AABB intersection via slab method
+                    const dx = curr[0] - prev[0];
+                    const dy = curr[1] - prev[1];
+                    var t_min: f32 = 0.0;
+                    var t_max: f32 = 1.0;
+
+                    if (@abs(dx) > 1e-8) {
+                        const tx1 = (min_x - prev[0]) / dx;
+                        const tx2 = (max_x - prev[0]) / dx;
+                        t_min = @max(t_min, @min(tx1, tx2));
+                        t_max = @min(t_max, @max(tx1, tx2));
+                    } else if (prev[0] < min_x or prev[0] > max_x) {
+                        prev = curr;
+                        continue;
+                    }
+
+                    if (@abs(dy) > 1e-8) {
+                        const ty1 = (min_y - prev[1]) / dy;
+                        const ty2 = (max_y - prev[1]) / dy;
+                        t_min = @max(t_min, @min(ty1, ty2));
+                        t_max = @min(t_max, @max(ty1, ty2));
+                    } else if (prev[1] < min_y or prev[1] > max_y) {
+                        prev = curr;
+                        continue;
+                    }
+
+                    if (t_min <= t_max) {
+                        found = true;
+                        break;
+                    }
+
+                    prev = curr;
                 }
 
                 link_entry.value_ptr.is_selected = found;
