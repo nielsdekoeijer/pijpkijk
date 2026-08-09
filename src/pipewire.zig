@@ -794,16 +794,19 @@ pub const PipewireHandle = struct {
                     }.lessThanFn,
                 );
 
+                var min_y: f32 = 0;
                 for (to_be_completed.items) |item| {
                     const node = self.nodes.getPtr(item.id).?;
+                    const node_height = node.computeNodeHeight();
+                    const ideal_y = item.center_of_mass - node_height / 2;
                     node.x = x_current;
-                    node.y = y_current;
+                    node.y = @max(ideal_y, min_y);
 
                     // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
                     // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
                     // rely implicitly on the order of the nodes! Bad and dumb, but we do it this way.
                     node.z = @floatFromInt(99999 - node.node_id);
-                    y_current += node.computeNodeHeight() + types.H_NODE_SPACING;
+                    min_y = node.y.? + node_height + types.H_NODE_SPACING;
 
                     try completed.put(self.allocator, item.id, {});
                 }
