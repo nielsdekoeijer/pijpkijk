@@ -346,37 +346,35 @@ pub const PipewireHandle = struct {
 
                     std.log.debug("PipewireHandle creating new link '{}'", .{id});
 
-                    if (self.nodes.getPtr(out_node_id_found)) |out_node| {
-                        if (out_node.outs.getPtr(out_port_id_found)) |out_port| {
-                            try out_port.connections.put(self.allocator, id, .{
-                                .node_id = inp_node_id_found,
-                                .port_id = inp_port_id_found,
-                                .link_id = id,
-                            });
-                        } else {
-                            std.log.err("Output port id '{}' not found on node '{}' while adding link", .{ out_port_id_found, out_node_id_found });
-                            return error.PipewireError;
-                        }
-                    } else {
-                        std.log.err("Output node id '{}' not found while adding link", .{out_node_id_found});
-                        return error.PipewireError;
-                    }
+                    // Gracefully handle event ordering races: link may arrive before
+                    // its referenced nodes/ports. Skip instead of panicking.
+                    const out_node = self.nodes.getPtr(out_node_id_found) orelse {
+                        std.log.warn("Output node id '{}' not found while adding link '{}', skipping (event race?)", .{ out_node_id_found, id });
+                        return;
+                    };
+                    const out_port = out_node.outs.getPtr(out_port_id_found) orelse {
+                        std.log.warn("Output port id '{}' not found on node '{}' while adding link '{}', skipping (event race?)", .{ out_port_id_found, out_node_id_found, id });
+                        return;
+                    };
+                    try out_port.connections.put(self.allocator, id, .{
+                        .node_id = inp_node_id_found,
+                        .port_id = inp_port_id_found,
+                        .link_id = id,
+                    });
 
-                    if (self.nodes.getPtr(inp_node_id_found)) |inp_node| {
-                        if (inp_node.inps.getPtr(inp_port_id_found)) |inp_port| {
-                            try inp_port.connections.put(self.allocator, id, .{
-                                .node_id = out_node_id_found,
-                                .port_id = out_port_id_found,
-                                .link_id = id,
-                            });
-                        } else {
-                            std.log.err("Input port id '{}' not found on node '{}' while adding link", .{ inp_port_id_found, inp_node_id_found });
-                            return error.PipewireError;
-                        }
-                    } else {
-                        std.log.err("Input node id '{}' not found while adding link", .{inp_node_id_found});
-                        return error.PipewireError;
-                    }
+                    const inp_node = self.nodes.getPtr(inp_node_id_found) orelse {
+                        std.log.warn("Input node id '{}' not found while adding link '{}', skipping (event race?)", .{ inp_node_id_found, id });
+                        return;
+                    };
+                    const inp_port = inp_node.inps.getPtr(inp_port_id_found) orelse {
+                        std.log.warn("Input port id '{}' not found on node '{}' while adding link '{}', skipping (event race?)", .{ inp_port_id_found, inp_node_id_found, id });
+                        return;
+                    };
+                    try inp_port.connections.put(self.allocator, id, .{
+                        .node_id = out_node_id_found,
+                        .port_id = out_port_id_found,
+                        .link_id = id,
+                    });
 
                     self.nodes_dirty = true;
                 },
