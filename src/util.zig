@@ -1053,6 +1053,29 @@ pub fn initVkSwapchain(
         }
     };
 
+    // Pick a supported composite alpha mode (X11 may not support OPAQUE)
+    const composite_alpha: u32 = blk: {
+        const preferred = [_]u32{
+            c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            c.VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+            c.VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+            c.VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+        };
+        for (preferred) |alpha| {
+            if (surface_capabilities.supportedCompositeAlpha & alpha != 0) {
+                break :blk alpha;
+            }
+        }
+        break :blk c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    };
+
+    std.log.info("Swapchain: extent={}x{}, minImageCount={}, compositeAlpha={}", .{
+        swap_extent.width,
+        swap_extent.height,
+        surface_capabilities.minImageCount,
+        composite_alpha,
+    });
+
     // initialize
     try handleError(c.vkCreateSwapchainKHR(device, &c.VkSwapchainCreateInfoKHR{
         .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -1076,8 +1099,8 @@ pub fn initVkSwapchain(
         .pQueueFamilyIndices = queue_family_indices,
         // e.g. rotate the image or not, we leave it the same
         .preTransform = surface_capabilities.currentTransform,
-        // if the window itself is see through, e.g. for a terminal with transparency
-        .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        // pick a composite alpha the surface supports
+        .compositeAlpha = composite_alpha,
         // triple buffering or vsync, etc.
         .presentMode = present_mode,
         // skip running fragment shader for obscured pixels
