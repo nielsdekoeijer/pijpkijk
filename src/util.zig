@@ -197,7 +197,10 @@ pub fn initVkInstance(
     defer layers.deinit(allocator);
     if (@import("builtin").mode == .Debug) {
         try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-        try checkRequestedVkInstanceLayersSupported(allocator, layers.items);
+        checkRequestedVkInstanceLayersSupported(allocator, layers.items) catch {
+            std.log.warn("Validation layers not available, continuing without them", .{});
+            layers.clearRetainingCapacity();
+        };
     }
 
     // handler for debug, on release builds we disable the validation layers
