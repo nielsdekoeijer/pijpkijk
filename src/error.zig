@@ -1,3 +1,4 @@
+const std = @import("std");
 const c = @import("c.zig").c;
 
 /// Return type helper to determine the return type of the handleError function
@@ -22,6 +23,7 @@ pub fn handleError(err: anytype) !ValidReturnType(@TypeOf(err)) {
             if (err >= 0) {
                 return;
             } else {
+                std.log.err("C/Vulkan error code: {}", .{err});
                 return error.CError;
             }
         },

@@ -1082,8 +1082,14 @@ pub fn initVkSwapchain(
         .pNext = null,
         .flags = 0,
         .surface = surface,
-        // minimum amount of images required by the surface
-        .minImageCount = surface_capabilities.minImageCount,
+        // request one more than minimum for triple buffering (clamped to max if nonzero)
+        .minImageCount = blk: {
+            const desired = surface_capabilities.minImageCount + 1;
+            if (surface_capabilities.maxImageCount > 0 and desired > surface_capabilities.maxImageCount) {
+                break :blk surface_capabilities.maxImageCount;
+            }
+            break :blk desired;
+        },
         // memory layout of the colors of the image
         .imageFormat = surface_format.format,
         .imageColorSpace = surface_format.colorSpace,
