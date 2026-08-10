@@ -1,11 +1,20 @@
 # Changelog
 
+## v0.7.0
+
+Port search & connect, and click-to-click connections.
+
+- `>` search: find an output port by `nodename:portname` and connect it to a target input
+- `<` search: find an input port by `nodename:portname` and connect it to a target output
+- Click-to-click port connections: click a port, then click another port to connect (replaces drag-hold-drop)
+- Swap `/` and `?` keybindings: `/` now centers camera (view), `?` now moves node to cursor
+
 ## v0.6.0
 
 Fuzzy node search and bug fixes.
 
-- `/` search: find a node by name and move it to the cursor position
-- `?` search: find a node and center the camera on it (live preview, restores view on cancel)
+- `?` search: find a node by name and move it to the cursor position
+- `/` search: find a node and center the camera on it (live preview, restores view on cancel)
 - Fuzzy matching with arrow key navigation
 - Help overlay moved from `?` to `H`
 - Fix overlapping node selection picking the wrong (bottom) node
