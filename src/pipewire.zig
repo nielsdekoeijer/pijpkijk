@@ -48,9 +48,6 @@ pub const PipewireHandle = struct {
     nodes: std.AutoArrayHashMapUnmanaged(u32, types.PipewireNode) = .empty,
     nodes_dirty: bool = true,
 
-    pipewire_nodes: std.AutoArrayHashMapUnmanaged(u32, PipewireNode) = .empty,
-    pipewire_links: std.AutoArrayHashMapUnmanaged(u32, PipewireLink) = .empty,
-    pipewire_ports: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
     port_listeners: std.ArrayListUnmanaged(*PortListenerData) = .empty,
 
     const ProfilerRegistry = struct {
@@ -416,7 +413,6 @@ pub const PipewireHandle = struct {
 
                     std.log.debug("PipewireHandle creating new node '{s}'", .{name_found});
 
-                    // TODO: old
                     if (self.nodes.getPtr(id)) |existing_node| {
                         std.log.debug("Overwriting existing node with name '{s}'", .{existing_node.name});
                         existing_node.deinit(self.allocator);
@@ -432,16 +428,6 @@ pub const PipewireHandle = struct {
                         .port_color = null,
                         .x = null,
                         .y = null,
-                    });
-                    // TODO: old
-
-                    if (self.pipewire_nodes.getPtr(id)) |node| {
-                        std.log.debug("Overwriting existing node with name '{s}'", .{node.name});
-                        node.deinit(self.allocator);
-                    }
-
-                    try self.pipewire_nodes.put(self.allocator, id, .{
-                        .name = name_found,
                     });
 
                     self.nodes_dirty = true;
@@ -915,8 +901,5 @@ pub const PipewireHandle = struct {
         self.port_listeners.deinit(self.allocator);
 
         self.nodes.deinit(self.allocator);
-        self.pipewire_nodes.deinit(self.allocator);
-        self.pipewire_links.deinit(self.allocator);
-        self.pipewire_ports.deinit(self.allocator);
     }
 };
