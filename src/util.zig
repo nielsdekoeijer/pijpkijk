@@ -777,76 +777,6 @@ pub fn findPresentQueueIndex(
 // This is the logical device which we use to interface with the physical device. It describes the features we want to
 // use from the physical device.
 
-/// Gets a list of all supported vulkan device layers
-fn getSupportedVkDeviceLayers(
-    allocator: std.mem.Allocator,
-    physical_device: c.VkPhysicalDevice,
-) !std.ArrayList([*:0]const u8) {
-    std.log.debug("Trying to enumerate supported vulkan device layers...", .{});
-    errdefer std.log.err("Trying to enumerate supported vulkan device layers failed", .{});
-
-    var count: u32 = 0;
-    try handleError(c.vkEnumerateDeviceLayerProperties(physical_device, &count, null));
-    std.log.debug("Vulkan reports '{}' device layers supported in total", .{count});
-
-    const layer_properties = try allocator.alloc(c.VkLayerProperties, count);
-    defer allocator.free(layer_properties);
-    try handleError(c.vkEnumerateDeviceLayerProperties(physical_device, &count, layer_properties.ptr));
-
-    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, count);
-    errdefer {
-        for (layers.items) |ext| allocator.free(std.mem.span(ext));
-        layers.deinit(allocator);
-    }
-
-    for (layer_properties) |layer_property| {
-        const name = try allocator.dupeZ(u8, std.mem.sliceTo(&layer_property.layerName, 0));
-        errdefer allocator.free(name);
-
-        std.log.debug("Support exists for device layer '{s}'", .{name});
-
-        try layers.append(allocator, name);
-    }
-
-    defer std.log.debug("Trying to enumerate supported vulkan device layers OK", .{});
-    return layers;
-}
-
-/// Checks if the requested device layers are supported
-fn checkRequestedVkDeviceLayersSupported(
-    allocator: std.mem.Allocator,
-    physical_device: c.VkPhysicalDevice,
-    requested_layers: []const [*:0]const u8,
-) !void {
-    std.log.debug("Trying to checking if requested vulkan layers are supported...", .{});
-    errdefer std.log.err("Trying to checking if requested vulkan layers are supported failed", .{});
-
-    // note that we own the memory here
-    var supported_layers = try getSupportedVkDeviceLayers(allocator, physical_device);
-    defer {
-        for (supported_layers.items) |s| allocator.free(std.mem.span(s));
-        supported_layers.deinit(allocator);
-    }
-
-    for (requested_layers) |requested| {
-        var found = false;
-        for (supported_layers.items) |supported| {
-            if (std.mem.eql(u8, std.mem.span(requested), std.mem.span(supported))) {
-                found = true;
-            }
-        }
-
-        if (!found) {
-            std.log.err("Could not find requested layer with name {s}", .{requested});
-            return error.VkErrorUnsupportedLayer;
-        } else {
-            std.log.debug("Found requested layer with name {s}", .{requested});
-        }
-    }
-
-    defer std.log.debug("Trying to checking if requested vulkan layers are supported OK", .{});
-}
-
 /// Gets a list of all supported device extensions
 fn getSupportedVkDeviceExtensions(
     allocator: std.mem.Allocator,
@@ -934,13 +864,7 @@ pub fn initVkDevice(
     try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
     try checkRequestedVkDeviceExtensionsSupported(allocator, physical_device, extensions.items);
 
-    // create our list of requested instance layers
-    var layers = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
-    defer layers.deinit(allocator);
-    if (@import("builtin").mode == .Debug) {
-        try layers.append(allocator, "VK_LAYER_KHRONOS_validation");
-        try checkRequestedVkDeviceLayersSupported(allocator, physical_device, layers.items);
-    }
+    // Note: device layers are deprecated since Vulkan 1.0 (enabledLayerCount must be 0)
 
     // populate queue families
     const queuePriorities: f32 = 1.0;
@@ -981,9 +905,9 @@ pub fn initVkDevice(
             .pQueueCreateInfos = queueFamilyCreateInfos.items.ptr,
             .queueCreateInfoCount = @intCast(queueFamilyCreateInfos.items.len),
 
-            // layers to enable
-            .ppEnabledLayerNames = layers.items.ptr,
-            .enabledLayerCount = @intCast(layers.items.len),
+            // layers (deprecated since Vulkan 1.0, must be 0)
+            .ppEnabledLayerNames = null,
+            .enabledLayerCount = 0,
 
             // extensions to enable
             .ppEnabledExtensionNames = extensions.items.ptr,
@@ -1072,12 +996,18 @@ pub fn initVkSwapchain(
         break :blk c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     };
 
-    std.log.info("Swapchain: extent={}x{}, minImageCount={}, compositeAlpha={}", .{
-        swap_extent.width,
-        swap_extent.height,
-        surface_capabilities.minImageCount,
-        composite_alpha,
-    });
+    std.log.info("Swapchain config:", .{});
+    std.log.info("  extent={}x{}", .{ swap_extent.width, swap_extent.height });
+    std.log.info("  minImageCount={}, maxImageCount={}", .{ surface_capabilities.minImageCount, surface_capabilities.maxImageCount });
+    std.log.info("  currentExtent={}x{}", .{ surface_capabilities.currentExtent.width, surface_capabilities.currentExtent.height });
+    std.log.info("  minImageExtent={}x{}", .{ surface_capabilities.minImageExtent.width, surface_capabilities.minImageExtent.height });
+    std.log.info("  maxImageExtent={}x{}", .{ surface_capabilities.maxImageExtent.width, surface_capabilities.maxImageExtent.height });
+    std.log.info("  supportedTransforms=0x{x}, currentTransform=0x{x}", .{ surface_capabilities.supportedTransforms, surface_capabilities.currentTransform });
+    std.log.info("  supportedCompositeAlpha=0x{x}, compositeAlpha=0x{x}", .{ surface_capabilities.supportedCompositeAlpha, composite_alpha });
+    std.log.info("  supportedUsageFlags=0x{x}", .{surface_capabilities.supportedUsageFlags});
+    std.log.info("  imageFormat={}, imageColorSpace={}", .{ surface_format.format, surface_format.colorSpace });
+    std.log.info("  presentMode={}", .{present_mode});
+    std.log.info("  imageSharingMode={}, graphicsQueue={}, presentQueue={}", .{ image_sharing_mode, graphics_queue_index, present_queue_index });
 
     // initialize
     try handleError(c.vkCreateSwapchainKHR(device, &c.VkSwapchainCreateInfoKHR{

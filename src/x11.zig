@@ -278,11 +278,20 @@ pub const X11Handle = struct {
         // Map (show) the window
         _ = xcb_c.xcb_map_window(self.connection, self.window);
         _ = xcb_c.xcb_flush(self.connection);
+
+        // Force a roundtrip to ensure the X server has processed the map request.
+        // Without this, Vulkan may try to create a swapchain against an unmapped window,
+        // which causes VK_ERROR_INITIALIZATION_FAILED on some drivers (e.g. RADV).
+        const cookie = xcb_c.xcb_get_input_focus(self.connection);
+        const reply = xcb_c.xcb_get_input_focus_reply(self.connection, cookie, null);
+        if (reply) |r| std.c.free(r);
     }
 
     pub fn surface_ready(self: X11Handle) bool {
+        // The roundtrip in start_surface guarantees the server processed the map.
+        // That's sufficient for Vulkan — no need to wait for expose (some WMs delay it).
         _ = self;
-        return true; // X11 window is ready immediately after map
+        return true;
     }
 
     pub fn request_frame_callback(self: *X11Handle) void {
