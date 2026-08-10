@@ -1803,7 +1803,7 @@ pub fn initTextVertexVkGraphicsPipeline(
                 .pNext = null,
                 .flags = 0,
                 .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
-                .sampleShadingEnable = c.VK_FALSE,
+                .sampleShadingEnable = c.VK_TRUE,
                 .minSampleShading = 1.0,
                 .pSampleMask = null,
                 .alphaToCoverageEnable = c.VK_FALSE,

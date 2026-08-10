@@ -109,6 +109,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
         port_id: u32,
         is_output: bool,
         anchor: [2]f32,
+        visual_index: usize = 0,
         from_search: bool = false,
         awaiting_release: bool = false,
         completed: bool = false,
@@ -789,6 +790,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                     .port_id = hit.port_id,
                                     .is_output = hit.is_output,
                                     .anchor = hit.center,
+                                    .visual_index = hit.visual_index,
                                     .awaiting_release = true,
                                 };
                                 needs_render = true;
@@ -940,6 +942,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                                 .port_id = pr.port_id,
                                                 .is_output = pr.is_output,
                                                 .anchor = anchor,
+                                                .visual_index = pr.visual_index,
                                                 .from_search = true,
                                             };
                                         }
@@ -1353,8 +1356,17 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                             (mouse_y / self.scale) + self.camera_pos[1],
                         };
 
-                        const p0 = if (drag.is_output) drag.anchor else mouse_world;
-                        const p3 = if (drag.is_output) mouse_world else drag.anchor;
+                        // Recalculate anchor from node's current position so the
+                        // preview follows when nodes move (e.g. new node spawns)
+                        const anchor = if (self.pipewire_handle.nodes.getPtr(drag.node_id)) |node| blk: {
+                            break :blk if (drag.is_output)
+                                [2]f32{ node.getOutPortX(drag.visual_index), node.getOutPortY(drag.visual_index) }
+                            else
+                                [2]f32{ node.getInpPortX(drag.visual_index), node.getInpPortY(drag.visual_index) };
+                        } else drag.anchor;
+
+                        const p0 = if (drag.is_output) anchor else mouse_world;
+                        const p3 = if (drag.is_output) mouse_world else anchor;
                         const offset = @abs(p3[0] - p0[0]) / 2.0;
                         const p1 = [2]f32{ p0[0] + offset, p0[1] };
                         const p2 = [2]f32{ p3[0] - offset, p3[1] };
