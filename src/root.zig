@@ -84,7 +84,7 @@ pub const App = struct {
     saved_camera_pos: [2]f32 = .{ 0, 0 },
     saved_scale: f32 = 1.0,
 
-    const SearchMode = enum { none, move_node, view_node };
+    const SearchMode = enum { none, move_node, view_node, connect_output, connect_input };
 
     const MAX_SEARCH_RESULTS = 10;
 
@@ -97,6 +97,9 @@ pub const App = struct {
         port_id: u32,
         is_output: bool,
         anchor: [2]f32,
+        from_search: bool = false,
+        awaiting_release: bool = false,
+        completed: bool = false,
     };
 
     const SearchResult = struct {
@@ -153,6 +156,73 @@ pub const App = struct {
                         .score = score,
                     };
                     if (count < MAX_SEARCH_RESULTS) count += 1;
+                }
+            }
+        }
+        return count;
+    }
+
+    const PortSearchResult = struct {
+        node_id: u32,
+        port_id: u32,
+        is_output: bool,
+        visual_index: usize,
+        score: i32,
+        display_name_buf: [128]u8 = undefined,
+        display_name_len: usize = 0,
+
+        fn displayName(self: *const PortSearchResult) []const u8 {
+            return self.display_name_buf[0..self.display_name_len];
+        }
+    };
+
+    fn getPortSearchResults(self: *App, comptime for_outputs: bool, results: *[MAX_SEARCH_RESULTS]PortSearchResult) usize {
+        var count: usize = 0;
+        const needle = self.search_buf[0..self.search_len];
+
+        var it = self.pipewire_handle.nodes.iterator();
+        while (it.next()) |entry| {
+            const node = entry.value_ptr;
+            const ports = if (for_outputs) &node.outs else &node.inps;
+            var port_it = ports.iterator();
+            var vi: usize = 0;
+            while (port_it.next()) |port_entry| : (vi += 1) {
+                const port = port_entry.value_ptr;
+                // Build "nodename:portname"
+                var name_buf: [128]u8 = undefined;
+                var name_len: usize = 0;
+                const nname = node.name;
+                const pname = port.name;
+                const needed = nname.len + 1 + pname.len;
+                if (needed <= name_buf.len) {
+                    @memcpy(name_buf[0..nname.len], nname);
+                    name_buf[nname.len] = ':';
+                    @memcpy(name_buf[nname.len + 1 .. needed], pname);
+                    name_len = needed;
+                } else {
+                    continue;
+                }
+
+                if (fuzzyMatch(needle, name_buf[0..name_len])) |score| {
+                    var insert_pos: usize = count;
+                    while (insert_pos > 0 and results[insert_pos - 1].score > score) {
+                        if (insert_pos < MAX_SEARCH_RESULTS) {
+                            results[insert_pos] = results[insert_pos - 1];
+                        }
+                        insert_pos -= 1;
+                    }
+                    if (insert_pos < MAX_SEARCH_RESULTS) {
+                        results[insert_pos] = .{
+                            .node_id = node.node_id,
+                            .port_id = port_entry.key_ptr.*,
+                            .is_output = for_outputs,
+                            .visual_index = vi,
+                            .score = score,
+                        };
+                        results[insert_pos].display_name_buf = name_buf;
+                        results[insert_pos].display_name_len = name_len;
+                        if (count < MAX_SEARCH_RESULTS) count += 1;
+                    }
                 }
             }
         }
@@ -645,16 +715,50 @@ pub const App = struct {
                     needs_render = true;
                 }
 
-                if (self.wayland_handle.state.input.mouse_down_l) {
+                // Port drag: bezier preview always follows mouse, click completes
+                if (self.port_drag) |drag| {
+                    if (drag.awaiting_release) {
+                        // Wait for mouse button release before accepting next click
+                        if (!self.wayland_handle.state.input.mouse_down_l) {
+                            if (drag.completed) {
+                                // Connection was completed, fully clear now
+                                self.port_drag = null;
+                            } else {
+                                self.port_drag.?.awaiting_release = false;
+                            }
+                        }
+                    } else if (self.wayland_handle.state.input.mouse_down_l) {
+                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                        const world_x = (mouse_x / self.scale) + self.camera_pos[0];
+                        const world_y = (mouse_y / self.scale) + self.camera_pos[1];
+
+                        // Hit-test for a target port of opposite type
+                        var it = self.pipewire_handle.nodes.iterator();
+                        while (it.next()) |entry| {
+                            if (entry.value_ptr.hitTestPort(world_x, world_y)) |hit| {
+                                if (hit.is_output != drag.is_output) {
+                                    if (drag.is_output) {
+                                        self.pipewire_handle.createLink(drag.node_id, drag.port_id, hit.node_id, hit.port_id);
+                                    } else {
+                                        self.pipewire_handle.createLink(hit.node_id, hit.port_id, drag.node_id, drag.port_id);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        // Mark completed; wait for release before clearing
+                        self.port_drag.?.awaiting_release = true;
+                        self.port_drag.?.completed = true;
+                    }
+                    needs_render = true;
+                } else if (self.wayland_handle.state.input.mouse_down_l) {
                     const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
                     const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
                     const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y = (mouse_y / self.scale) + self.camera_pos[1];
 
-                    if (self.port_drag != null) {
-                        // Port drag in progress: preview follows mouse via render
-                        needs_render = true;
-                    } else if (self.selected_node) |node_id| {
+                    if (self.selected_node) |node_id| {
                         if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
                             node.x.? += self.wayland_handle.state.input.mouse_dx / self.scale;
                             node.y.? += self.wayland_handle.state.input.mouse_dy / self.scale;
@@ -681,6 +785,7 @@ pub const App = struct {
                                     .port_id = hit.port_id,
                                     .is_output = hit.is_output,
                                     .anchor = hit.center,
+                                    .awaiting_release = true,
                                 };
                                 needs_render = true;
                             } else {
@@ -737,30 +842,7 @@ pub const App = struct {
                         }
                     }
                 } else {
-                    // Mouse released
-                    if (self.port_drag) |drag| {
-                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
-                        const world_x = (mouse_x / self.scale) + self.camera_pos[0];
-                        const world_y = (mouse_y / self.scale) + self.camera_pos[1];
-
-                        // Hit-test for a target port of opposite type
-                        var it = self.pipewire_handle.nodes.iterator();
-                        while (it.next()) |entry| {
-                            if (entry.value_ptr.hitTestPort(world_x, world_y)) |hit| {
-                                if (hit.is_output != drag.is_output) {
-                                    if (drag.is_output) {
-                                        self.pipewire_handle.createLink(drag.node_id, drag.port_id, hit.node_id, hit.port_id);
-                                    } else {
-                                        self.pipewire_handle.createLink(hit.node_id, hit.port_id, drag.node_id, drag.port_id);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        self.port_drag = null;
-                        needs_render = true;
-                    }
+                    // Mouse released (no port_drag active)
                     self.selected_node = null;
                     self.drag_start = null;
                 }
@@ -784,22 +866,8 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_slash) |ks| {
-                            if (ks == .PRESSED and self.search_mode == .move_node) {
-                                self.search_mode = .none;
-                                self.wayland_handle.state.input.key_slash = null;
-                                search_closed = true;
-                                needs_render = true;
-                            }
-                        }
-                    }
-
-                    if (!search_closed) {
                         if (self.wayland_handle.state.input.key_question) |kq| {
-                            if (kq == .PRESSED and self.search_mode == .view_node) {
-                                // Cancel view search
-                                self.camera_pos = self.saved_camera_pos;
-                                self.scale = self.saved_scale;
+                            if (kq == .PRESSED and self.search_mode == .move_node) {
                                 self.search_mode = .none;
                                 self.wayland_handle.state.input.key_question = null;
                                 search_closed = true;
@@ -809,31 +877,98 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_return) |kr| {
-                            if (kr == .PRESSED) {
-                                // Confirm search
-                                var results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
-                                const count = self.getSearchResults(&results);
-                                if (count > 0) {
-                                    const sel = @min(self.search_selected, count - 1);
-                                    const node_id = results[sel].node_id;
-                                    if (self.search_mode == .move_node) {
-                                        // Move selected node to cursor position
-                                        if (self.pipewire_handle.nodes.getPtr(node_id)) |node| {
-                                            const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                                            const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
-                                            const world_x = (mouse_x / self.scale) + self.camera_pos[0];
-                                            const world_y = (mouse_y / self.scale) + self.camera_pos[1];
-                                            node.x = world_x - types.PipewireNode.W_NODE / 2.0;
-                                            node.y = world_y - node.computeNodeHeight() / 2.0;
-                                        }
-                                    }
-                                    // For view_node, camera is already positioned from live preview
-                                }
+                        if (self.wayland_handle.state.input.key_slash) |ks| {
+                            if (ks == .PRESSED and self.search_mode == .view_node) {
+                                // Cancel view search
+                                self.camera_pos = self.saved_camera_pos;
+                                self.scale = self.saved_scale;
                                 self.search_mode = .none;
-                                self.wayland_handle.state.input.key_return = null;
+                                self.wayland_handle.state.input.key_slash = null;
                                 search_closed = true;
                                 needs_render = true;
+                            }
+                        }
+                    }
+
+                    if (!search_closed) {
+                        if (self.wayland_handle.state.input.key_greater) |kg| {
+                            if (kg == .PRESSED and self.search_mode == .connect_output) {
+                                self.search_mode = .none;
+                                self.wayland_handle.state.input.key_greater = null;
+                                search_closed = true;
+                                needs_render = true;
+                            }
+                        }
+                    }
+
+                    if (!search_closed) {
+                        if (self.wayland_handle.state.input.key_less) |kl| {
+                            if (kl == .PRESSED and self.search_mode == .connect_input) {
+                                self.search_mode = .none;
+                                self.wayland_handle.state.input.key_less = null;
+                                search_closed = true;
+                                needs_render = true;
+                            }
+                        }
+                    }
+
+                    if (!search_closed) {
+                        if (self.wayland_handle.state.input.key_return) |kr| {
+                            if (kr == .PRESSED) {
+                                if (self.search_mode == .connect_output or self.search_mode == .connect_input) {
+                                    // Confirm port search: set up port_drag from search
+                                    const for_outputs = (self.search_mode == .connect_output);
+                                    var port_results: [MAX_SEARCH_RESULTS]PortSearchResult = undefined;
+                                    const pcount = if (for_outputs)
+                                        self.getPortSearchResults(true, &port_results)
+                                    else
+                                        self.getPortSearchResults(false, &port_results);
+                                    if (pcount > 0) {
+                                        const sel = @min(self.search_selected, pcount - 1);
+                                        const pr = port_results[sel];
+                                        if (self.pipewire_handle.nodes.getPtr(pr.node_id)) |node| {
+                                            const anchor = if (pr.is_output)
+                                                [2]f32{ node.getOutPortX(pr.visual_index), node.getOutPortY(pr.visual_index) }
+                                            else
+                                                [2]f32{ node.getInpPortX(pr.visual_index), node.getInpPortY(pr.visual_index) };
+                                            self.port_drag = .{
+                                                .node_id = pr.node_id,
+                                                .port_id = pr.port_id,
+                                                .is_output = pr.is_output,
+                                                .anchor = anchor,
+                                                .from_search = true,
+                                            };
+                                        }
+                                    }
+                                    self.search_mode = .none;
+                                    self.wayland_handle.state.input.key_return = null;
+                                    search_closed = true;
+                                    needs_render = true;
+                                } else {
+                                    // Confirm node search
+                                    var results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
+                                    const count = self.getSearchResults(&results);
+                                    if (count > 0) {
+                                        const sel = @min(self.search_selected, count - 1);
+                                        const node_id = results[sel].node_id;
+                                        if (self.search_mode == .move_node) {
+                                            // Move selected node to cursor position
+                                            if (self.pipewire_handle.nodes.getPtr(node_id)) |node| {
+                                                const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
+                                                const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                                                const world_x = (mouse_x / self.scale) + self.camera_pos[0];
+                                                const world_y = (mouse_y / self.scale) + self.camera_pos[1];
+                                                node.x = world_x - types.PipewireNode.W_NODE / 2.0;
+                                                node.y = world_y - node.computeNodeHeight() / 2.0;
+                                            }
+                                        }
+                                        // For view_node, camera is already positioned from live preview
+                                    }
+                                    self.search_mode = .none;
+                                    self.wayland_handle.state.input.key_return = null;
+                                    search_closed = true;
+                                    needs_render = true;
+                                }
                             }
                         }
 
@@ -862,11 +997,12 @@ pub const App = struct {
                             }
                         }
 
-                        // Typed character (but not slash/question which we handle above)
+                        // Typed character (but not the key that opened the search)
                         if (self.wayland_handle.state.input.typed_codepoint) |cp| {
-                            // Don't add the '/' or '?' that opened the search
-                            const is_trigger = (cp == '/' and self.search_mode == .move_node) or
-                                (cp == '?' and self.search_mode == .view_node);
+                            const is_trigger = (cp == '?' and self.search_mode == .move_node) or
+                                (cp == '/' and self.search_mode == .view_node) or
+                                (cp == '>' and self.search_mode == .connect_output) or
+                                (cp == '<' and self.search_mode == .connect_input);
                             if (!is_trigger and self.search_len < self.search_buf.len) {
                                 self.search_buf[self.search_len] = @intCast(cp);
                                 self.search_len += 1;
@@ -881,6 +1017,8 @@ pub const App = struct {
                     self.wayland_handle.state.input.key_r = null;
                     self.wayland_handle.state.input.key_h = null;
                     self.wayland_handle.state.input.key_delete = null;
+                    self.wayland_handle.state.input.key_greater = null;
+                    self.wayland_handle.state.input.key_less = null;
 
                     // Live camera update for view_node mode (only after typing)
                     if (self.search_mode == .view_node and self.search_len > 0) {
@@ -943,24 +1081,44 @@ pub const App = struct {
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_slash) |ks| {
-                        if (ks == .PRESSED) {
+                    if (self.wayland_handle.state.input.key_question) |kq| {
+                        if (kq == .PRESSED) {
                             self.search_mode = .move_node;
                             self.search_len = 0;
                             self.search_selected = 0;
-                            self.wayland_handle.state.input.key_slash = null;
+                            self.wayland_handle.state.input.key_question = null;
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_question) |kq| {
-                        if (kq == .PRESSED) {
+                    if (self.wayland_handle.state.input.key_slash) |ks| {
+                        if (ks == .PRESSED) {
                             self.search_mode = .view_node;
                             self.search_len = 0;
                             self.search_selected = 0;
                             self.saved_camera_pos = self.camera_pos;
                             self.saved_scale = self.scale;
-                            self.wayland_handle.state.input.key_question = null;
+                            self.wayland_handle.state.input.key_slash = null;
+                            needs_render = true;
+                        }
+                    }
+
+                    if (self.wayland_handle.state.input.key_greater) |kg| {
+                        if (kg == .PRESSED) {
+                            self.search_mode = .connect_output;
+                            self.search_len = 0;
+                            self.search_selected = 0;
+                            self.wayland_handle.state.input.key_greater = null;
+                            needs_render = true;
+                        }
+                    }
+
+                    if (self.wayland_handle.state.input.key_less) |kl| {
+                        if (kl == .PRESSED) {
+                            self.search_mode = .connect_input;
+                            self.search_len = 0;
+                            self.search_selected = 0;
+                            self.wayland_handle.state.input.key_less = null;
                             needs_render = true;
                         }
                     }
@@ -1114,7 +1272,7 @@ pub const App = struct {
                             const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
                             const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
                             const overlay_w: f32 = 540.0;
-                            const overlay_h: f32 = 520.0;
+                            const overlay_h: f32 = 576.0;
                             const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
                             const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
                             const ow = overlay_w / self.scale;
@@ -1126,9 +1284,20 @@ pub const App = struct {
                     // Search dialog overlay background
                     if (self.search_mode != .none) {
                         const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
-                        var search_results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
-                        const result_count = self.getSearchResults(&search_results);
-                        const clamped_count = @min(result_count, MAX_SEARCH_RESULTS);
+                        const clamped_count = blk: {
+                            if (self.search_mode == .connect_output or self.search_mode == .connect_input) {
+                                var port_results: [MAX_SEARCH_RESULTS]PortSearchResult = undefined;
+                                const rc = if (self.search_mode == .connect_output)
+                                    self.getPortSearchResults(true, &port_results)
+                                else
+                                    self.getPortSearchResults(false, &port_results);
+                                break :blk @min(rc, MAX_SEARCH_RESULTS);
+                            } else {
+                                var search_results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
+                                const rc = self.getSearchResults(&search_results);
+                                break :blk @min(rc, MAX_SEARCH_RESULTS);
+                            }
+                        };
                         const overlay_w: f32 = 500.0;
                         const overlay_h: f32 = 60.0 + @as(f32, @floatFromInt(clamped_count)) * 32.0;
                         const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
@@ -1170,8 +1339,9 @@ pub const App = struct {
                         );
                     }
 
-                    // Append preview bezier for port drag
+                    // Append preview bezier for port drag (not when completed, just awaiting release)
                     if (self.port_drag) |drag| {
+                        if (!drag.completed) {
                         const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
                         const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
                         const mouse_world = [2]f32{
@@ -1200,6 +1370,7 @@ pub const App = struct {
                             p3,
                             1.0,
                         );
+                        }
                     }
 
                     std.mem.sort(types.BezierVertex, bezier_vertices.items, {}, struct {
@@ -1232,7 +1403,7 @@ pub const App = struct {
                             const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
                             const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
                             const overlay_w: f32 = 540.0;
-                            const overlay_h: f32 = 520.0;
+                            const overlay_h: f32 = 576.0;
                             const base_x = ((sw - overlay_w) / 2.0 + 30.0) / self.scale + self.camera_pos[0];
                             const base_y = ((sh - overlay_h) / 2.0 + 40.0) / self.scale + self.camera_pos[1];
                             const line_h: f32 = 28.0 / self.scale;
@@ -1246,8 +1417,10 @@ pub const App = struct {
 
                             const help_lines = [_][2][]const u8{
                                 .{ "H", "Show this help" },
-                                .{ "/", "Search & move node to cursor" },
-                                .{ "?", "Search & center camera on node" },
+                                .{ "?", "Search & move node to cursor" },
+                                .{ "/", "Search & center camera on node" },
+                                .{ ">", "Search output port & connect" },
+                                .{ "<", "Search input port & connect" },
                                 .{ "Q", "Quit" },
                                 .{ "R", "Re-layout graph" },
                                 .{ "Delete", "Delete selected connections" },
@@ -1265,7 +1438,7 @@ pub const App = struct {
                             cy += line_h * 1.5;
 
                             const mouse_lines = [_][2][]const u8{
-                                .{ "Drag port", "Create connection" },
+                                .{ "Click port", "Create connection" },
                                 .{ "Drag node", "Move node" },
                                 .{ "Drag empty", "Region select" },
                                 .{ "Right drag", "Pan camera" },
@@ -1291,7 +1464,13 @@ pub const App = struct {
                         const max_w: f32 = (overlay_w - 40.0) / self.scale;
 
                         // Title / prompt
-                        const prompt_label = if (self.search_mode == .move_node) "/ Search & Move" else "? Search & View";
+                        const prompt_label: []const u8 = switch (self.search_mode) {
+                            .move_node => "? Search & Move",
+                            .view_node => "/ Search & View",
+                            .connect_output => "> Connect Output",
+                            .connect_input => "< Connect Input",
+                            .none => unreachable,
+                        };
                         try types.TextVertex.append(self.allocator, self.font_atlas, prompt_label, .Left, base_x, base_y, 1.0, max_w, fs, &text_vertices, .{ 0.6, 0.8, 1.0, 1.0 });
 
                         // Search text with cursor
@@ -1303,22 +1482,45 @@ pub const App = struct {
                         try types.TextVertex.append(self.allocator, self.font_atlas, search_display[0 .. display_len + 1], .Left, base_x + 200.0 / self.scale, base_y, 1.0, max_w, fs, &text_vertices, null);
 
                         // Results
-                        var search_results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
-                        const result_count = self.getSearchResults(&search_results);
-                        const clamped_count = @min(result_count, MAX_SEARCH_RESULTS);
-
-                        for (0..clamped_count) |ri| {
-                            const ry = base_y + (34.0 + @as(f32, @floatFromInt(ri)) * 32.0) / self.scale;
-                            const result_color: [4]f32 = if (ri == @min(self.search_selected, clamped_count - 1))
-                                .{ 1.0, 1.0, 1.0, 1.0 }
+                        if (self.search_mode == .connect_output or self.search_mode == .connect_input) {
+                            var port_results: [MAX_SEARCH_RESULTS]PortSearchResult = undefined;
+                            const result_count = if (self.search_mode == .connect_output)
+                                self.getPortSearchResults(true, &port_results)
                             else
-                                .{ 0.7, 0.7, 0.7, 0.9 };
-                            try types.TextVertex.append(self.allocator, self.font_atlas, search_results[ri].name, .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, result_color);
-                        }
+                                self.getPortSearchResults(false, &port_results);
+                            const clamped_count = @min(result_count, MAX_SEARCH_RESULTS);
 
-                        if (clamped_count == 0 and self.search_len > 0) {
-                            const ry = base_y + 34.0 / self.scale;
-                            try types.TextVertex.append(self.allocator, self.font_atlas, "No results", .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, .{ 0.5, 0.5, 0.5, 0.8 });
+                            for (0..clamped_count) |ri| {
+                                const ry = base_y + (34.0 + @as(f32, @floatFromInt(ri)) * 32.0) / self.scale;
+                                const result_color: [4]f32 = if (ri == @min(self.search_selected, clamped_count - 1))
+                                    .{ 1.0, 1.0, 1.0, 1.0 }
+                                else
+                                    .{ 0.7, 0.7, 0.7, 0.9 };
+                                try types.TextVertex.append(self.allocator, self.font_atlas, port_results[ri].displayName(), .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, result_color);
+                            }
+
+                            if (clamped_count == 0 and self.search_len > 0) {
+                                const ry = base_y + 34.0 / self.scale;
+                                try types.TextVertex.append(self.allocator, self.font_atlas, "No results", .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, .{ 0.5, 0.5, 0.5, 0.8 });
+                            }
+                        } else {
+                            var search_results: [MAX_SEARCH_RESULTS]SearchResult = undefined;
+                            const result_count = self.getSearchResults(&search_results);
+                            const clamped_count = @min(result_count, MAX_SEARCH_RESULTS);
+
+                            for (0..clamped_count) |ri| {
+                                const ry = base_y + (34.0 + @as(f32, @floatFromInt(ri)) * 32.0) / self.scale;
+                                const result_color: [4]f32 = if (ri == @min(self.search_selected, clamped_count - 1))
+                                    .{ 1.0, 1.0, 1.0, 1.0 }
+                                else
+                                    .{ 0.7, 0.7, 0.7, 0.9 };
+                                try types.TextVertex.append(self.allocator, self.font_atlas, search_results[ri].name, .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, result_color);
+                            }
+
+                            if (clamped_count == 0 and self.search_len > 0) {
+                                const ry = base_y + 34.0 / self.scale;
+                                try types.TextVertex.append(self.allocator, self.font_atlas, "No results", .Left, base_x + 10.0 / self.scale, ry, 1.0, max_w, fs_small, &text_vertices, .{ 0.5, 0.5, 0.5, 0.8 });
+                            }
                         }
                     }
 

@@ -39,6 +39,8 @@ pub const WaylandHandle = struct {
             key_up: ?KeyState = null,
             key_down: ?KeyState = null,
             key_backspace: ?KeyState = null,
+            key_greater: ?KeyState = null,
+            key_less: ?KeyState = null,
             typed_codepoint: ?u21 = null,
 
             mouse_x: ?f32 = null,
@@ -730,6 +732,8 @@ pub const WaylandHandle = struct {
                     c.XKB_KEY_Up => handle.state.input.key_up = val,
                     c.XKB_KEY_Down => handle.state.input.key_down = val,
                     c.XKB_KEY_BackSpace => handle.state.input.key_backspace = val,
+                    c.XKB_KEY_greater => handle.state.input.key_greater = val,
+                    c.XKB_KEY_less => handle.state.input.key_less = val,
                     else => {},
                 }
 

@@ -659,7 +659,7 @@ pub const PipewireNode = struct {
         return .{ burn * base[0], burn * base[1], burn * base[2], base[3] };
     }
     /// Grab the x-coordinate of the given input pin
-    fn getInpPortX(self: PipewireNode, _: usize) f32 {
+    pub fn getInpPortX(self: PipewireNode, _: usize) f32 {
         return self.x.?;
     }
 
