@@ -545,14 +545,34 @@ pub const PipewireHandle = struct {
                 return;
             }
 
+            // Check if the removed ID is a port
             var node_it = self.nodes.iterator();
-            node_loop: while (node_it.next()) |node| {
+            while (node_it.next()) |node| {
+                if (node.value_ptr.inps.getPtr(id)) |port| {
+                    port.deinit(self.allocator);
+                    _ = node.value_ptr.inps.orderedRemove(id);
+                    std.log.debug("Input port {d} removed", .{id});
+                    self.nodes_dirty = true;
+                    return;
+                }
+                if (node.value_ptr.outs.getPtr(id)) |port| {
+                    port.deinit(self.allocator);
+                    _ = node.value_ptr.outs.orderedRemove(id);
+                    std.log.debug("Output port {d} removed", .{id});
+                    self.nodes_dirty = true;
+                    return;
+                }
+            }
+
+            // Check if the removed ID is a link
+            node_it = self.nodes.iterator();
+            var found_link = false;
+            while (node_it.next()) |node| {
                 var out_it = node.value_ptr.outs.iterator();
                 while (out_it.next()) |port| {
                     if (port.value_ptr.connections.swapRemove(id)) {
                         std.log.debug("Link {d} removed from output port", .{id});
-                        self.nodes_dirty = true;
-                        continue :node_loop;
+                        found_link = true;
                     }
                 }
 
@@ -560,11 +580,11 @@ pub const PipewireHandle = struct {
                 while (inp_it.next()) |port| {
                     if (port.value_ptr.connections.swapRemove(id)) {
                         std.log.debug("Link {d} removed from input port", .{id});
-                        self.nodes_dirty = true;
-                        continue :node_loop;
+                        found_link = true;
                     }
                 }
             }
+            if (found_link) self.nodes_dirty = true;
         }
 
         const registry = c.pw_registry_events{
