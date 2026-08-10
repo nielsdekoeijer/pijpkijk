@@ -914,6 +914,7 @@ pub fn initVkDevice(
             // features to enable
             .pEnabledFeatures = &c.VkPhysicalDeviceFeatures{
                 .samplerAnisotropy = c.VK_TRUE,
+                .sampleRateShading = c.VK_TRUE,
             },
         },
         null,
