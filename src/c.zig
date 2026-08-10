@@ -1,5 +1,5 @@
-pub const c = @cImport({
-    // For loading images
+// Wayland backend C imports (with VK_USE_PLATFORM_WAYLAND_KHR)
+pub const wl = @cImport({
     @cInclude("stb/stb_image.h");
 
     // Wayland
@@ -27,3 +27,19 @@ pub const c = @cImport({
     @cInclude("spa-0.2/spa/pod/iter.h");
     @cInclude("spa-0.2/spa/param/latency-utils.h");
 });
+
+// X11 backend C imports (with VK_USE_PLATFORM_XCB_KHR)
+pub const xcb = @cImport({
+    @cInclude("xcb/xcb.h");
+    @cInclude("xcb/xkb.h");
+    @cInclude("xkbcommon/xkbcommon.h");
+    @cInclude("xkbcommon/xkbcommon-x11.h");
+    @cInclude("sys/mman.h");
+    @cInclude("unistd.h");
+
+    @cDefine("VK_USE_PLATFORM_XCB_KHR", "1");
+    @cInclude("vulkan/vulkan.h");
+});
+
+// Legacy alias — most of the codebase uses `c` which is the wayland import
+pub const c = wl;

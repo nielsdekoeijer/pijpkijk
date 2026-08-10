@@ -76,7 +76,7 @@
         apps.default =
           let
             wrapper = pkgs.writeShellScript "pijpkijk-wrapper" ''
-              export LD_LIBRARY_PATH="${pkgs.vulkan-loader}/lib:${pkgs.pipewire}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              export LD_LIBRARY_PATH="${pkgs.vulkan-loader}/lib:${pkgs.pipewire}/lib:${pkgs.libxcb}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               exec ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 ${packages.default}/bin/pijpkijk "$@"
             '';
           in

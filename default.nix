@@ -43,6 +43,8 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.wayland-protocols
     xkbcommon-static.dev
     libffi-static
+    pkgs.libxcb.dev
+    pkgs.libxcb-keysyms
   ];
 
   installPhase = ''

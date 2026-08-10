@@ -162,6 +162,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    // Wayland backend
     mod.linkSystemLibrary("wayland-client", .{
         .needed = true,
         .preferred_link_mode = .static,
@@ -172,6 +173,25 @@ pub fn build(b: *std.Build) void {
         .preferred_link_mode = .static,
         .use_pkg_config = .yes,
     });
+
+    // X11 backend
+    mod.linkSystemLibrary("xcb", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
+    mod.linkSystemLibrary("xcb-xkb", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
+    mod.linkSystemLibrary("xkbcommon-x11", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .yes,
+    });
+
+    // Shared
     mod.linkSystemLibrary("xkbcommon", .{
         .needed = true,
         .preferred_link_mode = .static,

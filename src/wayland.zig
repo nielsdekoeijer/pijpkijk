@@ -950,6 +950,63 @@ pub const WaylandHandle = struct {
         self.state.frame_ready = false;
     }
 
+    // === Backend abstraction methods ===
+    // These provide the same interface as X11Handle for use by root.zig
+
+    pub fn getFd(self: *WaylandHandle) i32 {
+        return c.wl_display_get_fd(self.core.display);
+    }
+
+    pub fn dispatch(self: *WaylandHandle) !void {
+        try handleError(c.wl_display_dispatch(self.core.display));
+    }
+
+    pub fn dispatchPending(self: *WaylandHandle) void {
+        _ = c.wl_display_dispatch_pending(self.core.display);
+    }
+
+    pub fn flushDisplay(self: *WaylandHandle) !void {
+        try handleError(c.wl_display_flush(self.core.display));
+    }
+
+    pub fn createVkSurface(self: *WaylandHandle, instance: c.VkInstance) !c.VkSurfaceKHR {
+        var surface: c.VkSurfaceKHR = undefined;
+
+        const create_info = c.VkWaylandSurfaceCreateInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+            .pNext = null,
+            .flags = 0,
+            .display = self.core.display,
+            .surface = self.registry_surface.surface.?,
+        };
+
+        try handleError(c.vkCreateWaylandSurfaceKHR(instance, &create_info, null, &surface));
+        return surface;
+    }
+
+    pub fn getVkExtent(self: *WaylandHandle, capabilities: c.VkSurfaceCapabilitiesKHR) c.VkExtent2D {
+        const fs = self.state.fractional_scale;
+        const scaled_w: u32 = @intCast((@as(u64, self.state.width) * fs + 60) / 120);
+        const scaled_h: u32 = @intCast((@as(u64, self.state.height) * fs + 60) / 120);
+
+        return c.VkExtent2D{
+            .width = std.math.clamp(
+                scaled_w,
+                capabilities.minImageExtent.width,
+                capabilities.maxImageExtent.width,
+            ),
+            .height = std.math.clamp(
+                scaled_h,
+                capabilities.minImageExtent.height,
+                capabilities.maxImageExtent.height,
+            ),
+        };
+    }
+
+    pub fn getVkInstanceExtensionName() [*:0]const u8 {
+        return c.VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
+    }
+
     pub fn deinit(self: *WaylandHandle) void {
         if (self.registry_keyboard.xkb_state) |s| c.xkb_state_unref(s);
         if (self.registry_keyboard.xkb_keymap) |s| c.xkb_keymap_unref(s);
@@ -976,3 +1033,5 @@ pub const WaylandHandle = struct {
         std.log.info("Deinit WaylandHandle OK", .{});
     }
 };
+
+pub const Handle = WaylandHandle;

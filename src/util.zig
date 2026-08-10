@@ -4,7 +4,6 @@ const QuadVertex = @import("types.zig").QuadVertex;
 const BezierVertex = @import("types.zig").BezierVertex;
 const TextVertex = @import("types.zig").TextVertex;
 const Uniform = @import("types.zig").Uniform;
-const WaylandHandle = @import("wayland.zig").WaylandHandle;
 const handleError = @import("error.zig").handleError;
 
 // =Generic============================================================================================================
@@ -172,6 +171,7 @@ fn checkRequestedVkInstanceLayersSupported(
 /// Initialize vulkan instance with our required features and details
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
+    surface_extension_name: [*:0]const u8,
 ) !c.VkInstance {
     var instance: c.VkInstance = undefined;
 
@@ -183,7 +183,7 @@ pub fn initVkInstance(
     defer extensions.deinit(allocator);
 
     try extensions.append(allocator, c.VK_KHR_SURFACE_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+    try extensions.append(allocator, surface_extension_name);
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 
     if (@import("builtin").mode == .Debug) {
@@ -277,32 +277,7 @@ pub fn deinitVkInstance(
 // =VkSurface==========================================================================================================
 // The surface is the thing we draw onto.
 
-/// Initialize vulkan surface from a wayland instance
-pub fn initVkSurfaceWayland(
-    instance: c.VkInstance,
-    wayland_display: *c.struct_wl_display,
-    wayland_surface: *c.struct_wl_surface,
-) !c.VkSurfaceKHR {
-    var surface: c.VkSurfaceKHR = undefined;
-
-    std.log.info("Trying to init vulkan surface...", .{});
-    errdefer std.log.err("Trying to init vulkan surface failed", .{});
-
-    const create_info = c.VkWaylandSurfaceCreateInfoKHR{
-        .sType = c.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
-        .pNext = null,
-        .flags = 0,
-        .display = wayland_display,
-        .surface = wayland_surface,
-    };
-
-    try handleError(c.vkCreateWaylandSurfaceKHR(instance, &create_info, null, &surface));
-
-    defer std.log.info("Trying to init vulkan surface OK", .{});
-    return surface;
-}
-
-/// Deinitialize vulkan surface from
+/// Deinitialize vulkan surface
 pub fn deinitVkSurface(
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
@@ -476,29 +451,6 @@ pub fn initVkPhysicalDevice(
 // =VkSurfaceCapabilities==============================================================================================
 // Describes some properties of our surface, such as the min, max and current size. Used in swapchain creation and
 // window extend calculation.
-
-pub fn getVkExtentFromWayland(
-    handle: *WaylandHandle,
-    capabilities: c.VkSurfaceCapabilitiesKHR,
-) c.VkExtent2D {
-    // Apply fractional scale: logical size * (scale / 120)
-    const fs = handle.state.fractional_scale;
-    const scaled_w: u32 = @intCast((@as(u64, handle.state.width) * fs + 60) / 120);
-    const scaled_h: u32 = @intCast((@as(u64, handle.state.height) * fs + 60) / 120);
-
-    return c.VkExtent2D{
-        .width = std.math.clamp(
-            scaled_w,
-            capabilities.minImageExtent.width,
-            capabilities.maxImageExtent.width,
-        ),
-        .height = std.math.clamp(
-            scaled_h,
-            capabilities.minImageExtent.height,
-            capabilities.maxImageExtent.height,
-        ),
-    };
-}
 
 /// Gets the surface capabilities of our physical device given the surface
 pub fn getPhysicalDeviceSurfaceCapabilities(

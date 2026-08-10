@@ -4,21 +4,31 @@ const Io = std.Io;
 const c = @import("c.zig").c;
 const handleError = @import("error.zig").handleError;
 const util = @import("util.zig");
-const wayland = @import("wayland.zig");
+pub const wayland = @import("wayland.zig");
+pub const x11 = @import("x11.zig");
 const pipewire = @import("pipewire.zig");
 const types = @import("types.zig");
 
 pub const FRAMES_IN_FLIGHT = 3;
 
+pub const BackendKind = enum {
+    wayland,
+    x11,
+};
+
 pub const UserData = enum(u64) {
     ANAS,
-    WAYLAND,
+    WINDOW,
     PIPEWIRE_START_RETRY,
     PIPEWIRE_EVENT,
 };
 
-pub const App = struct {
-    wayland_handle: *wayland.WaylandHandle,
+/// Default App using Wayland backend (for backward compatibility)
+pub const App = AppImpl(wayland.Handle);
+
+pub fn AppImpl(comptime BackendHandle: type) type {
+    return struct {
+    window_handle: *BackendHandle,
     pipewire_handle: *pipewire.PipewireHandle,
     instance: c.VkInstance,
     surface: c.VkSurfaceKHR,
@@ -88,8 +98,10 @@ pub const App = struct {
 
     const MAX_SEARCH_RESULTS = 10;
 
-    fn dpiScale(self: *const App) f32 {
-        return @as(f32, @floatFromInt(self.wayland_handle.state.fractional_scale)) / 120.0;
+    const Self = @This();
+
+    fn dpiScale(self: *const Self) f32 {
+        return @as(f32, @floatFromInt(self.window_handle.state.fractional_scale)) / 120.0;
     }
 
     const PortDragState = struct {
@@ -133,7 +145,7 @@ pub const App = struct {
     }
 
     /// Gather search results matching the current search buffer, sorted by score
-    fn getSearchResults(self: *App, results: *[MAX_SEARCH_RESULTS]SearchResult) usize {
+    fn getSearchResults(self: *Self, results: *[MAX_SEARCH_RESULTS]SearchResult) usize {
         var count: usize = 0;
         const needle = self.search_buf[0..self.search_len];
 
@@ -176,7 +188,7 @@ pub const App = struct {
         }
     };
 
-    fn getPortSearchResults(self: *App, comptime for_outputs: bool, results: *[MAX_SEARCH_RESULTS]PortSearchResult) usize {
+    fn getPortSearchResults(self: *Self, comptime for_outputs: bool, results: *[MAX_SEARCH_RESULTS]PortSearchResult) usize {
         var count: usize = 0;
         const needle = self.search_buf[0..self.search_len];
 
@@ -235,46 +247,42 @@ pub const App = struct {
     const default_width = 800;
     const default_height = 600;
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io) !App {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) !Self {
         _ = io;
 
-        var self: @This() = undefined;
+        var self: Self = undefined;
         self.allocator = allocator;
 
         self.ring = try std.os.linux.IoUring.init(32, 0);
         errdefer self.ring.deinit();
 
-        // =InitializeWayland==========================================================================================
-        self.wayland_handle = try allocator.create(wayland.WaylandHandle);
-        try wayland.WaylandHandle.init(self.wayland_handle);
+        // =InitializeWindowBackend====================================================================================
+        self.window_handle = try allocator.create(BackendHandle);
+        try BackendHandle.init(self.window_handle);
 
-        try self.wayland_handle.start_core();
-        while (!self.wayland_handle.core_ready()) {
-            try self.wayland_handle.flush_blocking();
+        try self.window_handle.start_core();
+        while (!self.window_handle.core_ready()) {
+            try self.window_handle.flush_blocking();
         }
 
-        while (!self.wayland_handle.seat_ready()) {
-            try self.wayland_handle.flush_blocking();
+        while (!self.window_handle.seat_ready()) {
+            try self.window_handle.flush_blocking();
         }
 
-        try self.wayland_handle.start_surface();
-        while (!self.wayland_handle.surface_ready()) {
-            try self.wayland_handle.flush_blocking();
+        try self.window_handle.start_surface();
+        while (!self.window_handle.surface_ready()) {
+            try self.window_handle.flush_blocking();
         }
 
         // =InitializePipewire=========================================================================================
         self.pipewire_handle = try pipewire.PipewireHandle.init(self.allocator);
 
         // =AqcuireVkInstance==========================================================================================
-        self.instance = try util.initVkInstance(allocator);
+        self.instance = try util.initVkInstance(allocator, BackendHandle.getVkInstanceExtensionName());
         errdefer util.deinitVkInstance(self.instance);
 
         // =AqcuireVkSurface===========================================================================================
-        self.surface = try util.initVkSurfaceWayland(
-            self.instance,
-            self.wayland_handle.core.display,
-            self.wayland_handle.registry_surface.surface.?,
-        );
+        self.surface = try self.window_handle.createVkSurface(self.instance);
         errdefer util.deinitVkSurface(self.instance, self.surface);
 
         // =AqcuireVkPhysicalDevice====================================================================================
@@ -282,7 +290,7 @@ pub const App = struct {
         self.graphics_queue_index = try util.findGraphicsQueueIndex(allocator, self.physical_device);
         self.present_queue_index = try util.findPresentQueueIndex(allocator, self.surface, self.physical_device);
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
+        self.swap_extent = self.window_handle.getVkExtent(self.surface_capabilities);
         self.surface_format = try util.getPreferredVkSurfaceFormat(allocator, self.physical_device, self.surface);
         self.present_mode = try util.getPreferredVkPresentMode(allocator, self.physical_device, self.surface);
 
@@ -525,7 +533,7 @@ pub const App = struct {
         return self;
     }
 
-    pub fn run(self: *App) !void {
+    pub fn run(self: *Self) !void {
         std.log.info("Running loop...", .{});
         errdefer std.log.info("Running loop exited with failure", .{});
 
@@ -537,7 +545,7 @@ pub const App = struct {
 
         var gpu_frame_ready = [_]bool{ true, true, true };
 
-        const wl_fd = c.wl_display_get_fd(self.wayland_handle.core.display);
+        const wl_fd = self.window_handle.getFd();
 
         var pw_fd: ?i32 = null;
         if (self.pipewire_handle.start_core()) |_| {
@@ -560,7 +568,7 @@ pub const App = struct {
         }
 
         _ = try self.ring.poll_add(
-            @intFromEnum(UserData.WAYLAND),
+            @intFromEnum(UserData.WINDOW),
             wl_fd,
             std.posix.POLL.IN,
         );
@@ -570,7 +578,7 @@ pub const App = struct {
         // Our main loop of the program
         while (running) {
             // Process leftover events from our last loop
-            _ = c.wl_display_dispatch_pending(self.wayland_handle.core.display);
+            self.window_handle.dispatchPending();
 
             var cqes: [16]std.os.linux.io_uring_cqe = undefined;
 
@@ -622,15 +630,13 @@ pub const App = struct {
                         }
                     },
 
-                    UserData.WAYLAND => {
+                    UserData.WINDOW => {
                         // If no error...
                         if (cqe.res >= 0) {
                             const revents = @as(u32, @bitCast(cqe.res));
 
                             if ((revents & std.posix.POLL.IN) != 0) {
-                                try handleError(
-                                    c.wl_display_dispatch(self.wayland_handle.core.display),
-                                );
+                                try self.window_handle.dispatch();
 
                                 needs_render = true;
                                 needs_state_update = true;
@@ -638,20 +644,18 @@ pub const App = struct {
                         }
 
                         // Reschedule
-                        _ = try self.ring.poll_add(@intFromEnum(UserData.WAYLAND), wl_fd, std.posix.POLL.IN);
+                        _ = try self.ring.poll_add(@intFromEnum(UserData.WINDOW), wl_fd, std.posix.POLL.IN);
                     },
                 }
             }
 
             {
                 _ = try self.ring.submit();
-                try handleError(
-                    c.wl_display_flush(self.wayland_handle.core.display),
-                );
+                try self.window_handle.flushDisplay();
             }
 
             // Check if we should shut down
-            if (self.wayland_handle.state.should_close) {
+            if (self.window_handle.state.should_close) {
                 running = false;
             }
 
@@ -659,17 +663,17 @@ pub const App = struct {
             if (needs_state_update) {
                 needs_state_update = false;
 
-                if (self.wayland_handle.state.input.scroll_y != 0 or self.wayland_handle.state.input.scroll_x != 0) {
-                    if (self.wayland_handle.state.input.scroll_is_finger) {
+                if (self.window_handle.state.input.scroll_y != 0 or self.window_handle.state.input.scroll_x != 0) {
+                    if (self.window_handle.state.input.scroll_is_finger) {
                         // Trackpad 2-finger scroll → pan
-                        self.camera_pos[0] += self.wayland_handle.state.input.scroll_x * 3.0 / self.scale;
-                        self.camera_pos[1] += self.wayland_handle.state.input.scroll_y * 3.0 / self.scale;
+                        self.camera_pos[0] += self.window_handle.state.input.scroll_x * 3.0 / self.scale;
+                        self.camera_pos[1] += self.window_handle.state.input.scroll_y * 3.0 / self.scale;
                     } else {
                         // Mouse wheel → zoom
-                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                        const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
 
-                        const zoom_factor = 1.0 - (self.wayland_handle.state.input.scroll_y * 0.02);
+                        const zoom_factor = 1.0 - (self.window_handle.state.input.scroll_y * 0.02);
 
                         const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
                         const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
@@ -684,21 +688,21 @@ pub const App = struct {
                         self.camera_pos[1] += (world_y_before - world_y_after);
                     }
 
-                    self.wayland_handle.state.input.scroll_x = 0;
-                    self.wayland_handle.state.input.scroll_y = 0;
-                    self.wayland_handle.scale_snapshot = self.scale;
+                    self.window_handle.state.input.scroll_x = 0;
+                    self.window_handle.state.input.scroll_y = 0;
+                    self.window_handle.scale_snapshot = self.scale;
                     needs_render = true;
                 }
 
                 // Pinch gesture → zoom
-                if (self.wayland_handle.state.input.pinch_scale != 0) {
-                    const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                    const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                if (self.window_handle.state.input.pinch_scale != 0) {
+                    const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                    const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
 
                     const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
 
-                    self.scale = std.math.clamp(self.wayland_handle.state.input.pinch_scale, 0.05, 5.0);
+                    self.scale = std.math.clamp(self.window_handle.state.input.pinch_scale, 0.05, 5.0);
 
                     const world_x_after = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y_after = (mouse_y / self.scale) + self.camera_pos[1];
@@ -709,9 +713,9 @@ pub const App = struct {
                     needs_render = true;
                 }
 
-                if (self.wayland_handle.state.input.mouse_down_r) {
-                    self.camera_pos[0] -= self.wayland_handle.state.input.mouse_dx / self.scale;
-                    self.camera_pos[1] -= self.wayland_handle.state.input.mouse_dy / self.scale;
+                if (self.window_handle.state.input.mouse_down_r) {
+                    self.camera_pos[0] -= self.window_handle.state.input.mouse_dx / self.scale;
+                    self.camera_pos[1] -= self.window_handle.state.input.mouse_dy / self.scale;
                     needs_render = true;
                 }
 
@@ -719,7 +723,7 @@ pub const App = struct {
                 if (self.port_drag) |drag| {
                     if (drag.awaiting_release) {
                         // Wait for mouse button release before accepting next click
-                        if (!self.wayland_handle.state.input.mouse_down_l) {
+                        if (!self.window_handle.state.input.mouse_down_l) {
                             if (drag.completed) {
                                 // Connection was completed, fully clear now
                                 self.port_drag = null;
@@ -727,9 +731,9 @@ pub const App = struct {
                                 self.port_drag.?.awaiting_release = false;
                             }
                         }
-                    } else if (self.wayland_handle.state.input.mouse_down_l) {
-                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                    } else if (self.window_handle.state.input.mouse_down_l) {
+                        const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
                         const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                         const world_y = (mouse_y / self.scale) + self.camera_pos[1];
 
@@ -752,16 +756,16 @@ pub const App = struct {
                         self.port_drag.?.completed = true;
                     }
                     needs_render = true;
-                } else if (self.wayland_handle.state.input.mouse_down_l) {
-                    const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                    const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                } else if (self.window_handle.state.input.mouse_down_l) {
+                    const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                    const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
                     const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                     const world_y = (mouse_y / self.scale) + self.camera_pos[1];
 
                     if (self.selected_node) |node_id| {
                         if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
-                            node.x.? += self.wayland_handle.state.input.mouse_dx / self.scale;
-                            node.y.? += self.wayland_handle.state.input.mouse_dy / self.scale;
+                            node.x.? += self.window_handle.state.input.mouse_dx / self.scale;
+                            node.y.? += self.window_handle.state.input.mouse_dy / self.scale;
                             needs_render = true;
                         }
                     } else {
@@ -835,7 +839,7 @@ pub const App = struct {
                                     min_y,
                                     max_x,
                                     max_y,
-                                    self.wayland_handle.state.input.shift_held,
+                                    self.window_handle.state.input.shift_held,
                                 );
                             }
                             needs_render = true;
@@ -851,7 +855,7 @@ pub const App = struct {
                     // --- Search mode input handling ---
                     var search_closed = false;
 
-                    if (self.wayland_handle.state.input.key_escape) |ke| {
+                    if (self.window_handle.state.input.key_escape) |ke| {
                         if (ke == .PRESSED) {
                             // Cancel search
                             if (self.search_mode == .view_node) {
@@ -859,17 +863,17 @@ pub const App = struct {
                                 self.scale = self.saved_scale;
                             }
                             self.search_mode = .none;
-                            self.wayland_handle.state.input.key_escape = null;
+                            self.window_handle.state.input.key_escape = null;
                             search_closed = true;
                             needs_render = true;
                         }
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_question) |kq| {
+                        if (self.window_handle.state.input.key_question) |kq| {
                             if (kq == .PRESSED and self.search_mode == .move_node) {
                                 self.search_mode = .none;
-                                self.wayland_handle.state.input.key_question = null;
+                                self.window_handle.state.input.key_question = null;
                                 search_closed = true;
                                 needs_render = true;
                             }
@@ -877,13 +881,13 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_slash) |ks| {
+                        if (self.window_handle.state.input.key_slash) |ks| {
                             if (ks == .PRESSED and self.search_mode == .view_node) {
                                 // Cancel view search
                                 self.camera_pos = self.saved_camera_pos;
                                 self.scale = self.saved_scale;
                                 self.search_mode = .none;
-                                self.wayland_handle.state.input.key_slash = null;
+                                self.window_handle.state.input.key_slash = null;
                                 search_closed = true;
                                 needs_render = true;
                             }
@@ -891,10 +895,10 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_greater) |kg| {
+                        if (self.window_handle.state.input.key_greater) |kg| {
                             if (kg == .PRESSED and self.search_mode == .connect_output) {
                                 self.search_mode = .none;
-                                self.wayland_handle.state.input.key_greater = null;
+                                self.window_handle.state.input.key_greater = null;
                                 search_closed = true;
                                 needs_render = true;
                             }
@@ -902,10 +906,10 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_less) |kl| {
+                        if (self.window_handle.state.input.key_less) |kl| {
                             if (kl == .PRESSED and self.search_mode == .connect_input) {
                                 self.search_mode = .none;
-                                self.wayland_handle.state.input.key_less = null;
+                                self.window_handle.state.input.key_less = null;
                                 search_closed = true;
                                 needs_render = true;
                             }
@@ -913,7 +917,7 @@ pub const App = struct {
                     }
 
                     if (!search_closed) {
-                        if (self.wayland_handle.state.input.key_return) |kr| {
+                        if (self.window_handle.state.input.key_return) |kr| {
                             if (kr == .PRESSED) {
                                 if (self.search_mode == .connect_output or self.search_mode == .connect_input) {
                                     // Confirm port search: set up port_drag from search
@@ -941,7 +945,7 @@ pub const App = struct {
                                         }
                                     }
                                     self.search_mode = .none;
-                                    self.wayland_handle.state.input.key_return = null;
+                                    self.window_handle.state.input.key_return = null;
                                     search_closed = true;
                                     needs_render = true;
                                 } else {
@@ -954,8 +958,8 @@ pub const App = struct {
                                         if (self.search_mode == .move_node) {
                                             // Move selected node to cursor position
                                             if (self.pipewire_handle.nodes.getPtr(node_id)) |node| {
-                                                const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                                                const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                                                const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                                                const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
                                                 const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                                                 const world_y = (mouse_y / self.scale) + self.camera_pos[1];
                                                 node.x = world_x - types.PipewireNode.W_NODE / 2.0;
@@ -965,40 +969,40 @@ pub const App = struct {
                                         // For view_node, camera is already positioned from live preview
                                     }
                                     self.search_mode = .none;
-                                    self.wayland_handle.state.input.key_return = null;
+                                    self.window_handle.state.input.key_return = null;
                                     search_closed = true;
                                     needs_render = true;
                                 }
                             }
                         }
 
-                        if (self.wayland_handle.state.input.key_up) |ku| {
+                        if (self.window_handle.state.input.key_up) |ku| {
                             if (ku == .PRESSED or ku == .REPEATED) {
                                 if (self.search_selected > 0) self.search_selected -= 1;
-                                self.wayland_handle.state.input.key_up = null;
+                                self.window_handle.state.input.key_up = null;
                                 needs_render = true;
                             }
                         }
 
-                        if (self.wayland_handle.state.input.key_down) |kd| {
+                        if (self.window_handle.state.input.key_down) |kd| {
                             if (kd == .PRESSED or kd == .REPEATED) {
                                 self.search_selected += 1;
-                                self.wayland_handle.state.input.key_down = null;
+                                self.window_handle.state.input.key_down = null;
                                 needs_render = true;
                             }
                         }
 
-                        if (self.wayland_handle.state.input.key_backspace) |kb| {
+                        if (self.window_handle.state.input.key_backspace) |kb| {
                             if (kb == .PRESSED or kb == .REPEATED) {
                                 if (self.search_len > 0) self.search_len -= 1;
                                 self.search_selected = 0;
-                                self.wayland_handle.state.input.key_backspace = null;
+                                self.window_handle.state.input.key_backspace = null;
                                 needs_render = true;
                             }
                         }
 
                         // Typed character (but not the key that opened the search)
-                        if (self.wayland_handle.state.input.typed_codepoint) |cp| {
+                        if (self.window_handle.state.input.typed_codepoint) |cp| {
                             const is_trigger = (cp == '?' and self.search_mode == .move_node) or
                                 (cp == '/' and self.search_mode == .view_node) or
                                 (cp == '>' and self.search_mode == .connect_output) or
@@ -1013,12 +1017,12 @@ pub const App = struct {
                     }
 
                     // Consume normal-mode keys so they don't leak when search closes
-                    self.wayland_handle.state.input.key_q = null;
-                    self.wayland_handle.state.input.key_r = null;
-                    self.wayland_handle.state.input.key_h = null;
-                    self.wayland_handle.state.input.key_delete = null;
-                    self.wayland_handle.state.input.key_greater = null;
-                    self.wayland_handle.state.input.key_less = null;
+                    self.window_handle.state.input.key_q = null;
+                    self.window_handle.state.input.key_r = null;
+                    self.window_handle.state.input.key_h = null;
+                    self.window_handle.state.input.key_delete = null;
+                    self.window_handle.state.input.key_greater = null;
+                    self.window_handle.state.input.key_less = null;
 
                     // Live camera update for view_node mode (only after typing)
                     if (self.search_mode == .view_node and self.search_len > 0) {
@@ -1029,8 +1033,8 @@ pub const App = struct {
                             if (self.pipewire_handle.nodes.get(results[sel].node_id)) |node| {
                                 if (node.x) |nx| {
                                     if (node.y) |ny| {
-                                        const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
-                                        const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
+                                        const sw: f32 = @floatFromInt(self.window_handle.state.width);
+                                        const sh: f32 = @floatFromInt(self.window_handle.state.height);
                                         const node_cx = nx + types.PipewireNode.W_NODE / 2.0;
                                         const node_cy = ny + node.computeNodeHeight() / 2.0;
                                         self.camera_pos[0] = node_cx - (sw / 2.0) / self.scale;
@@ -1043,19 +1047,19 @@ pub const App = struct {
                     }
                 } else {
                     // --- Normal mode input handling ---
-                    if (self.wayland_handle.state.input.key_q) |key_q| {
+                    if (self.window_handle.state.input.key_q) |key_q| {
                         if (key_q == .PRESSED) {
                             running = false;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_r) |key_r| {
+                    if (self.window_handle.state.input.key_r) |key_r| {
                         if (key_r == .PRESSED) {
                             try self.pipewire_handle.update_graph_metadata();
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_delete) |key_delete| {
+                    if (self.window_handle.state.input.key_delete) |key_delete| {
                         if (key_delete == .PRESSED) {
                             var node_it = self.pipewire_handle.nodes.iterator();
                             while (node_it.next()) |*node| {
@@ -1075,55 +1079,55 @@ pub const App = struct {
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_h) |kh| {
+                    if (self.window_handle.state.input.key_h) |kh| {
                         if (kh == .PRESSED or kh == .REPEATED) {
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_question) |kq| {
+                    if (self.window_handle.state.input.key_question) |kq| {
                         if (kq == .PRESSED) {
                             self.search_mode = .move_node;
                             self.search_len = 0;
                             self.search_selected = 0;
-                            self.wayland_handle.state.input.key_question = null;
+                            self.window_handle.state.input.key_question = null;
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_slash) |ks| {
+                    if (self.window_handle.state.input.key_slash) |ks| {
                         if (ks == .PRESSED) {
                             self.search_mode = .view_node;
                             self.search_len = 0;
                             self.search_selected = 0;
                             self.saved_camera_pos = self.camera_pos;
                             self.saved_scale = self.scale;
-                            self.wayland_handle.state.input.key_slash = null;
+                            self.window_handle.state.input.key_slash = null;
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_greater) |kg| {
+                    if (self.window_handle.state.input.key_greater) |kg| {
                         if (kg == .PRESSED) {
                             self.search_mode = .connect_output;
                             self.search_len = 0;
                             self.search_selected = 0;
-                            self.wayland_handle.state.input.key_greater = null;
+                            self.window_handle.state.input.key_greater = null;
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_less) |kl| {
+                    if (self.window_handle.state.input.key_less) |kl| {
                         if (kl == .PRESSED) {
                             self.search_mode = .connect_input;
                             self.search_len = 0;
                             self.search_selected = 0;
-                            self.wayland_handle.state.input.key_less = null;
+                            self.window_handle.state.input.key_less = null;
                             needs_render = true;
                         }
                     }
 
-                    if (self.wayland_handle.state.input.key_escape) |key_escape| {
+                    if (self.window_handle.state.input.key_escape) |key_escape| {
                         if (key_escape == .PRESSED) {
                             self.port_drag = null;
                             var node_it = self.pipewire_handle.nodes.iterator();
@@ -1141,19 +1145,19 @@ pub const App = struct {
                 }
 
                 // Clear typed codepoint so it doesn't repeat
-                self.wayland_handle.state.input.typed_codepoint = null;
+                self.window_handle.state.input.typed_codepoint = null;
 
                 // Reset frame deltas so they don't repeatedly apply
-                self.wayland_handle.state.input.mouse_dx = 0;
-                self.wayland_handle.state.input.mouse_dy = 0;
+                self.window_handle.state.input.mouse_dx = 0;
+                self.window_handle.state.input.mouse_dy = 0;
             }
 
             // Do a render if required
-            if (needs_render and self.wayland_handle.state.frame_ready) {
+            if (needs_render and self.window_handle.state.frame_ready) {
                 needs_render = false;
 
                 {
-                    const new_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
+                    const new_extent = self.window_handle.getVkExtent(self.surface_capabilities);
                     if (self.swap_extent.width != new_extent.width or
                         self.swap_extent.height != new_extent.height)
                     {
@@ -1251,8 +1255,8 @@ pub const App = struct {
 
                     // Selection rectangle (appended after scene quads, drawn separately)
                     if (self.drag_start) |start| {
-                        if (self.wayland_handle.state.input.mouse_x) |mx| {
-                            if (self.wayland_handle.state.input.mouse_y) |my| {
+                        if (self.window_handle.state.input.mouse_x) |mx| {
+                            if (self.window_handle.state.input.mouse_y) |my| {
                                 const world_ex = (mx / self.scale) + self.camera_pos[0];
                                 const world_ey = (my / self.scale) + self.camera_pos[1];
                                 const rx = @min(start[0], world_ex);
@@ -1267,11 +1271,11 @@ pub const App = struct {
                     }
 
                     // Help overlay background (now triggered by H key)
-                    if (self.wayland_handle.state.input.key_h) |kh| {
+                    if (self.window_handle.state.input.key_h) |kh| {
                         if (kh == .PRESSED or kh == .REPEATED) {
-                            const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
-                            const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
-                            const overlay_w: f32 = 540.0;
+                            const sw: f32 = @floatFromInt(self.window_handle.state.width);
+                            const sh: f32 = @floatFromInt(self.window_handle.state.height);
+                            const overlay_w: f32 = 620.0;
                             const overlay_h: f32 = 576.0;
                             const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
                             const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
@@ -1283,7 +1287,7 @@ pub const App = struct {
 
                     // Search dialog overlay background
                     if (self.search_mode != .none) {
-                        const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
+                        const sw: f32 = @floatFromInt(self.window_handle.state.width);
                         const clamped_count = blk: {
                             if (self.search_mode == .connect_output or self.search_mode == .connect_input) {
                                 var port_results: [MAX_SEARCH_RESULTS]PortSearchResult = undefined;
@@ -1342,8 +1346,8 @@ pub const App = struct {
                     // Append preview bezier for port drag (not when completed, just awaiting release)
                     if (self.port_drag) |drag| {
                         if (!drag.completed) {
-                        const mouse_x = self.wayland_handle.state.input.mouse_x orelse 0.0;
-                        const mouse_y = self.wayland_handle.state.input.mouse_y orelse 0.0;
+                        const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
+                        const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
                         const mouse_world = [2]f32{
                             (mouse_x / self.scale) + self.camera_pos[0],
                             (mouse_y / self.scale) + self.camera_pos[1],
@@ -1398,11 +1402,11 @@ pub const App = struct {
                     }
 
                     // Help overlay text (now triggered by H key)
-                    if (self.wayland_handle.state.input.key_h) |kh| {
+                    if (self.window_handle.state.input.key_h) |kh| {
                         if (kh == .PRESSED or kh == .REPEATED) {
-                            const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
-                            const sh: f32 = @floatFromInt(self.wayland_handle.state.height);
-                            const overlay_w: f32 = 540.0;
+                            const sw: f32 = @floatFromInt(self.window_handle.state.width);
+                            const sh: f32 = @floatFromInt(self.window_handle.state.height);
+                            const overlay_w: f32 = 620.0;
                             const overlay_h: f32 = 576.0;
                             const base_x = ((sw - overlay_w) / 2.0 + 30.0) / self.scale + self.camera_pos[0];
                             const base_y = ((sh - overlay_h) / 2.0 + 40.0) / self.scale + self.camera_pos[1];
@@ -1455,7 +1459,7 @@ pub const App = struct {
 
                     // Search dialog text
                     if (self.search_mode != .none) {
-                        const sw: f32 = @floatFromInt(self.wayland_handle.state.width);
+                        const sw: f32 = @floatFromInt(self.window_handle.state.width);
                         const overlay_w: f32 = 500.0;
                         const base_x = ((sw - overlay_w) / 2.0 + 20.0) / self.scale + self.camera_pos[0];
                         const base_y = (40.0 + 16.0) / self.scale + self.camera_pos[1];
@@ -1658,7 +1662,7 @@ pub const App = struct {
                 try handleError(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.in_flight_fences[current_frame]));
 
                 // Request new frame
-                self.wayland_handle.request_frame_callback();
+                self.window_handle.request_frame_callback();
 
                 // Present
                 const present_info = c.VkPresentInfoKHR{
@@ -1691,7 +1695,7 @@ pub const App = struct {
         defer std.log.info("Running loop OK", .{});
     }
 
-    pub fn recreateSwapchain(self: *App) !void {
+    pub fn recreateSwapchain(self: *Self) !void {
         std.log.info("Recreating swapchain...", .{});
         errdefer std.log.info("Recreating swapchain failed", .{});
 
@@ -1712,7 +1716,7 @@ pub const App = struct {
 
         // Reinitialize
         self.surface_capabilities = try util.getPhysicalDeviceSurfaceCapabilities(self.physical_device, self.surface);
-        self.swap_extent = util.getVkExtentFromWayland(self.wayland_handle, self.surface_capabilities);
+        self.swap_extent = self.window_handle.getVkExtent(self.surface_capabilities);
         self.swapchain = try util.initVkSwapchain(
             self.device,
             self.surface,
@@ -1758,9 +1762,9 @@ pub const App = struct {
         defer std.log.info("Recreating swapchain OK", .{});
     }
 
-    pub fn deinit(self: *App) void {
-        defer self.allocator.destroy(self.wayland_handle);
-        defer self.wayland_handle.deinit();
+    pub fn deinit(self: *Self) void {
+        defer self.allocator.destroy(self.window_handle);
+        defer self.window_handle.deinit();
         defer self.allocator.destroy(self.pipewire_handle);
         defer self.pipewire_handle.deinit();
         defer self.ring.deinit();
@@ -1806,4 +1810,5 @@ pub const App = struct {
         }
         defer self.font_atlas.deinit();
     }
-};
+    };
+}
