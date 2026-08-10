@@ -656,37 +656,16 @@ pub const PipewireHandle = struct {
         var completed: std.AutoHashMapUnmanaged(u32, void) = .empty;
         defer completed.deinit(self.allocator);
 
-        // Ensure all nodes have a port color associated with them, and mark
-        // already-positioned nodes as completed so we don't overwrite them
+        // Ensure all nodes have a port color associated with them
         {
             var node_it = self.nodes.iterator();
             while (node_it.next()) |*node| {
                 node.value_ptr.port_color = types.VibrantColor.getColorByIndex(node.value_ptr.node_id);
-                if (node.value_ptr.x != null and node.value_ptr.y != null) {
-                    // Preserve existing position; only ensure z is set
-                    if (node.value_ptr.z == null) {
-                        node.value_ptr.z = @floatFromInt(99999 -| node.value_ptr.node_id);
-                    }
-                    try completed.put(self.allocator, node.value_ptr.node_id, {});
-                }
             }
         }
 
-        // If all nodes are already placed, nothing to do
-        if (completed.count() == self.nodes.count()) return;
-
-        // Find the rightmost x position of already-placed nodes so new nodes go after them
         var x_current: f32 = 0;
         var y_current: f32 = 0;
-        {
-            var node_it = self.nodes.iterator();
-            while (node_it.next()) |*node| {
-                if (node.value_ptr.x) |nx| {
-                    const right = nx + types.PipewireNode.W_NODE + types.W_NODE_SPACING;
-                    if (right > x_current) x_current = right;
-                }
-            }
-        }
 
         // First pass: place unconnected nodes that have NO input ports in the first column.
         // Unconnected nodes WITH input ports are deferred to the last column.
@@ -724,7 +703,7 @@ pub const PipewireHandle = struct {
                     // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
                     // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
                     // rely implicitly on the order of the nodes! Bad and dumb, but we do it this way.
-                    node.value_ptr.z = @floatFromInt(99999 -| node.value_ptr.node_id);
+                    node.value_ptr.z = @floatFromInt(99999 - node.value_ptr.node_id);
                     y_current += node.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
 
                     try completed.put(self.allocator, node.value_ptr.node_id, {});
@@ -830,7 +809,7 @@ pub const PipewireHandle = struct {
                     // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
                     // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
                     // rely implicitly on the order of the nodes! Bad and dumb, but we do it this way.
-                    node.z = @floatFromInt(99999 -| node.node_id);
+                    node.z = @floatFromInt(99999 - node.node_id);
                     min_y = node.y.? + node_height + types.H_NODE_SPACING;
 
                     try completed.put(self.allocator, item.id, {});
@@ -848,7 +827,7 @@ pub const PipewireHandle = struct {
                         if (completed.contains(remaining.value_ptr.node_id)) continue;
                         remaining.value_ptr.x = x_current;
                         remaining.value_ptr.y = y_current;
-                        remaining.value_ptr.z = @floatFromInt(99999 -| remaining.value_ptr.node_id);
+                        remaining.value_ptr.z = @floatFromInt(99999 - remaining.value_ptr.node_id);
                         y_current += remaining.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
                         try completed.put(self.allocator, remaining.value_ptr.node_id, {});
                     }
@@ -866,7 +845,7 @@ pub const PipewireHandle = struct {
                 const node = self.nodes.getPtr(node_id).?;
                 node.x = x_current;
                 node.y = y_current;
-                node.z = @floatFromInt(99999 -| node.node_id);
+                node.z = @floatFromInt(99999 - node.node_id);
                 y_current += node.computeNodeHeight() + types.H_NODE_SPACING;
 
                 try completed.put(self.allocator, node_id, {});
