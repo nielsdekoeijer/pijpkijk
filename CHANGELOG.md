@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.0
+
+X11/XCB backend support and runtime backend detection.
+
+- X11 backend via libxcb: keyboard, mouse, scroll, window management
+- Runtime backend detection: auto-selects Wayland if `WAYLAND_DISPLAY` is set, falls back to X11
+- `PIJPKIJK_BACKEND` env var override (`wayland` or `x11`) for testing
+- Comptime-generic `App` struct — both backends compiled in, zero runtime overhead
+- XCB libraries statically linked (no new shared lib deps)
+- Graceful degradation on X11: no pinch-to-zoom, no fractional scaling, discrete scroll
+- Wider help overlay (540px → 620px)
+
 ## v0.7.0
 
 Port search & connect, and click-to-click connections.

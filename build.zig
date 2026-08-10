@@ -77,7 +77,7 @@ fn addWaylandProtocol(
 }
 
 pub fn build(b: *std.Build) void {
-    const version = "0.1.0";
+    const version = "0.8.0";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
