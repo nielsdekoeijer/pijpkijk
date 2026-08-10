@@ -157,6 +157,7 @@ pub const WaylandHandle = struct {
             std.log.info("Trying to configure surface...", .{});
 
             c.xdg_surface_ack_configure(xdg_surface, serial);
+            c.wl_surface_commit(handle.registry_surface.surface);
             handle.registry_surface.configured = true;
 
             defer std.log.info("Trying to configure surface OK", .{});
