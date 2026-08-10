@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0
+
+Fuzzy node search and bug fixes.
+
+- `/` search: find a node by name and move it to the cursor position
+- `?` search: find a node and center the camera on it (live preview, restores view on cancel)
+- Fuzzy matching with arrow key navigation
+- Help overlay moved from `?` to `H`
+- Fix overlapping node selection picking the wrong (bottom) node
+
 ## v0.5.0
 
 Trackpad gesture support and cleanup.
