@@ -604,8 +604,9 @@ pub const App = struct {
                                 };
                                 needs_render = true;
                             } else {
-                                // Try node pick
-                                var hit_node = false;
+                                // Try node pick (select topmost = lowest z)
+                                var best_z: f32 = std.math.inf(f32);
+                                var best_node: ?usize = null;
                                 var it = self.pipewire_handle.nodes.iterator();
                                 while (it.next()) |entry| {
                                     const n = entry.value_ptr;
@@ -616,15 +617,19 @@ pub const App = struct {
                                             if (world_x >= nx and world_x <= nx + w and
                                                 world_y >= ny and world_y <= ny + h)
                                             {
-                                                self.selected_node = entry.key_ptr.*;
-                                                hit_node = true;
-                                                break;
+                                                const z = n.z orelse std.math.inf(f32);
+                                                if (z < best_z) {
+                                                    best_z = z;
+                                                    best_node = entry.key_ptr.*;
+                                                }
                                             }
                                         }
                                     }
                                 }
 
-                                if (!hit_node) {
+                                if (best_node) |node_id| {
+                                    self.selected_node = node_id;
+                                } else {
                                     self.drag_start = .{ world_x, world_y };
                                 }
                             }
