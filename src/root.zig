@@ -1325,6 +1325,11 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                     overlay_vertex_count = @intCast(quad_vertices.items.len - scene_vertex_count);
 
                     // TODO: this is ugly as sin, and its because our use of anyopque
+                    if (quad_vertices.items.len > self.quad_vertex_buffer_set.max_vertices) {
+                        std.log.warn("Quad vertex count ({}) exceeds GPU buffer capacity ({}), clamping", .{ quad_vertices.items.len, self.quad_vertex_buffer_set.max_vertices });
+                        quad_vertices.items.len = self.quad_vertex_buffer_set.max_vertices;
+                        overlay_vertex_count = 0;
+                    }
                     if (quad_vertices.items.len > 0) {
                         const quad_vert_map: [*]types.QuadVertex = @ptrCast(@alignCast(
                             self.quad_vertex_buffer_set.vkBuffersMapped[current_frame],
@@ -1395,6 +1400,10 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         }
                     }.lessThanFn);
 
+                    if (bezier_vertices.items.len > self.bezier_vertex_buffer_set.max_vertices) {
+                        std.log.warn("Bezier vertex count ({}) exceeds GPU buffer capacity ({}), clamping", .{ bezier_vertices.items.len, self.bezier_vertex_buffer_set.max_vertices });
+                        bezier_vertices.items.len = self.bezier_vertex_buffer_set.max_vertices;
+                    }
                     if (bezier_vertices.items.len > 0) {
                         // TODO: this is ugly as sin, and its because our use of anyopque
                         const bezier_vert_map: [*]types.BezierVertex = @ptrCast(@alignCast(
@@ -1540,10 +1549,16 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         }
                     }
 
-                    const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(
-                        self.text_vertex_buffer_set.vkBuffersMapped[current_frame],
-                    ));
-                    @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
+                    if (text_vertices.items.len > self.text_vertex_buffer_set.max_vertices) {
+                        std.log.warn("Text vertex count ({}) exceeds GPU buffer capacity ({}), clamping", .{ text_vertices.items.len, self.text_vertex_buffer_set.max_vertices });
+                        text_vertices.items.len = self.text_vertex_buffer_set.max_vertices;
+                    }
+                    if (text_vertices.items.len > 0) {
+                        const text_vert_map: [*]types.TextVertex = @ptrCast(@alignCast(
+                            self.text_vertex_buffer_set.vkBuffersMapped[current_frame],
+                        ));
+                        @memcpy(text_vert_map[0..text_vertices.items.len], text_vertices.items);
+                    }
                 }
 
                 // Reset command buffer for the current frame
