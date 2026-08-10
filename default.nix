@@ -15,11 +15,23 @@ let
   libffi-static = pkgs.libffi.overrideAttrs (old: {
     configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
   });
+
+  libxcb-static = pkgs.libxcb.overrideAttrs (old: {
+    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
+  });
+
+  libxau-static = pkgs.libxau.overrideAttrs (old: {
+    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
+  });
+
+  libxdmcp-static = pkgs.libxdmcp.overrideAttrs (old: {
+    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
+  });
 in
 pkgs.stdenv.mkDerivation rec {
   pname = "pijpkijk";
 
-  version = "0.1.0";
+  version = "0.7.0";
 
   src = ./.;
 
@@ -43,8 +55,9 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.wayland-protocols
     xkbcommon-static.dev
     libffi-static
-    pkgs.libxcb.dev
-    pkgs.libxcb-keysyms
+    libxcb-static.dev
+    libxau-static.dev
+    libxdmcp-static.dev
   ];
 
   installPhase = ''

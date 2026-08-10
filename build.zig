@@ -177,17 +177,28 @@ pub fn build(b: *std.Build) void {
     // X11 backend
     mod.linkSystemLibrary("xcb", .{
         .needed = true,
-        .preferred_link_mode = .dynamic,
+        .preferred_link_mode = .static,
         .use_pkg_config = .yes,
     });
     mod.linkSystemLibrary("xcb-xkb", .{
         .needed = true,
-        .preferred_link_mode = .dynamic,
+        .preferred_link_mode = .static,
         .use_pkg_config = .yes,
     });
     mod.linkSystemLibrary("xkbcommon-x11", .{
         .needed = true,
-        .preferred_link_mode = .dynamic,
+        .preferred_link_mode = .static,
+        .use_pkg_config = .yes,
+    });
+    // Transitive deps of static libxcb
+    mod.linkSystemLibrary("xau", .{
+        .needed = true,
+        .preferred_link_mode = .static,
+        .use_pkg_config = .yes,
+    });
+    mod.linkSystemLibrary("xdmcp", .{
+        .needed = true,
+        .preferred_link_mode = .static,
         .use_pkg_config = .yes,
     });
 
