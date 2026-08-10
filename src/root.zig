@@ -455,7 +455,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
             100000,
             FRAMES_IN_FLIGHT,
         );
-        errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
+        errdefer util.deinitVertexBufferSet(allocator, self.device, self.bezier_vertex_buffer_set);
 
         self.text_vertex_buffer_set = try util.initVertexBufferSet(
             types.TextVertex,
@@ -465,7 +465,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
             100000,
             FRAMES_IN_FLIGHT,
         );
-        errdefer util.deinitVertexBufferSet(allocator, self.device, self.quad_vertex_buffer_set);
+        errdefer util.deinitVertexBufferSet(allocator, self.device, self.text_vertex_buffer_set);
 
         // =Semaphores=================================================================================================
         self.render_finished_semaphore = try util.initVkSemaphores(allocator, self.device, self.images.len);
