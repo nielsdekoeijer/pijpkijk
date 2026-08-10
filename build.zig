@@ -79,7 +79,11 @@ fn addWaylandProtocol(
 pub fn build(b: *std.Build) void {
     const version = "0.8.0";
 
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{
+        .default_target = .{
+            .cpu_model = .baseline,
+        },
+    });
     const optimize = b.standardOptimizeOption(.{});
 
     const slang_step = b.step("compile-shaders", "Compile shaders");
