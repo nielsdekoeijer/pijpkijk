@@ -1011,10 +1011,12 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                 (cp == '>' and self.search_mode == .connect_output) or
                                 (cp == '<' and self.search_mode == .connect_input);
                             if (!is_trigger and self.search_len < self.search_buf.len) {
-                                self.search_buf[self.search_len] = @intCast(cp);
-                                self.search_len += 1;
-                                self.search_selected = 0;
-                                needs_render = true;
+                                if (std.math.cast(u8, cp)) |byte| {
+                                    self.search_buf[self.search_len] = byte;
+                                    self.search_len += 1;
+                                    self.search_selected = 0;
+                                    needs_render = true;
+                                }
                             }
                         }
                     }
