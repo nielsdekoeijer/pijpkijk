@@ -33,6 +33,13 @@ pub const WaylandHandle = struct {
             key_r: ?KeyState = null,
             key_delete: ?KeyState = null,
             key_question: ?KeyState = null,
+            key_slash: ?KeyState = null,
+            key_h: ?KeyState = null,
+            key_return: ?KeyState = null,
+            key_up: ?KeyState = null,
+            key_down: ?KeyState = null,
+            key_backspace: ?KeyState = null,
+            typed_codepoint: ?u21 = null,
 
             mouse_x: ?f32 = null,
             mouse_y: ?f32 = null,
@@ -715,9 +722,23 @@ pub const WaylandHandle = struct {
                     c.XKB_KEY_d => handle.state.input.key_d = val,
                     c.XKB_KEY_q => handle.state.input.key_q = val,
                     c.XKB_KEY_r => handle.state.input.key_r = val,
+                    c.XKB_KEY_h => handle.state.input.key_h = val,
                     c.XKB_KEY_Delete => handle.state.input.key_delete = val,
                     c.XKB_KEY_question => handle.state.input.key_question = val,
+                    c.XKB_KEY_slash => handle.state.input.key_slash = val,
+                    c.XKB_KEY_Return => handle.state.input.key_return = val,
+                    c.XKB_KEY_Up => handle.state.input.key_up = val,
+                    c.XKB_KEY_Down => handle.state.input.key_down = val,
+                    c.XKB_KEY_BackSpace => handle.state.input.key_backspace = val,
                     else => {},
+                }
+
+                // Capture typed character for text input
+                if (val == .PRESSED or val == .REPEATED) {
+                    const cp = c.xkb_state_key_get_utf32(xkb_state, key + 8);
+                    if (cp >= 0x20 and cp < 0x7F) {
+                        handle.state.input.typed_codepoint = @intCast(cp);
+                    }
                 }
             }
 
