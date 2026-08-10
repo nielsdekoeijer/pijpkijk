@@ -860,8 +860,6 @@ pub fn initVkDevice(
     var extensions = try std.ArrayList([*:0]const u8).initCapacity(allocator, 0);
     defer extensions.deinit(allocator);
     try extensions.append(allocator, c.VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME);
-    try extensions.append(allocator, c.VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME);
     try checkRequestedVkDeviceExtensionsSupported(allocator, physical_device, extensions.items);
 
     // Note: device layers are deprecated since Vulkan 1.0 (enabledLayerCount must be 0)
@@ -2378,11 +2376,7 @@ pub fn initVkFence(device: c.VkDevice) !c.VkFence {
         device,
         &c.VkFenceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = &c.VkExportFenceCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO,
-                .pNext = null,
-                .handleTypes = c.VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQUE_FD_BIT,
-            },
+            .pNext = null,
             .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         },
         null,
