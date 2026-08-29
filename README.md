@@ -1,9 +1,8 @@
 # pijpkijk
 
-A minimal PipeWire graph viewer and patchbay for Wayland.
+A minimal PipeWire graph viewer and patchbay using SDL3.
 
-Built from scratch with Zig, raw Wayland, Vulkan, and PipeWire — no toolkit, no
-SDL, no intermediate libraries.
+Built with Zig, SDL3, Vulkan, and PipeWire.
 
 ## Install
 
@@ -22,7 +21,7 @@ nix run
 
 ## Runtime dependencies
 
-- Wayland compositor
+- SDL3-supported desktop environment
 - PipeWire (running)
 - Vulkan-capable GPU + driver
 
@@ -53,7 +52,7 @@ nix run
 ## Tech stack
 
 - **Language:** Zig 0.16
-- **Display:** Wayland (raw protocol, no libwayland wrappers)
+- **Display and input:** SDL3
 - **Graphics:** Vulkan
 - **Audio graph:** PipeWire
 - **I/O:** io_uring

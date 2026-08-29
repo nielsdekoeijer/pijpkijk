@@ -171,7 +171,7 @@ fn checkRequestedVkInstanceLayersSupported(
 /// Initialize vulkan instance with our required features and details
 pub fn initVkInstance(
     allocator: std.mem.Allocator,
-    surface_extension_name: [*:0]const u8,
+    surface_extension_names: []const [*:0]const u8,
 ) !c.VkInstance {
     var instance: c.VkInstance = undefined;
 
@@ -183,7 +183,11 @@ pub fn initVkInstance(
     defer extensions.deinit(allocator);
 
     try extensions.append(allocator, c.VK_KHR_SURFACE_EXTENSION_NAME);
-    try extensions.append(allocator, surface_extension_name);
+    for (surface_extension_names) |extension_name| {
+        if (!std.mem.eql(u8, std.mem.span(extension_name), std.mem.sliceTo(c.VK_KHR_SURFACE_EXTENSION_NAME, 0))) {
+            try extensions.append(allocator, extension_name);
+        }
+    }
     try extensions.append(allocator, c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 
     if (@import("builtin").mode == .Debug) {
@@ -979,7 +983,7 @@ pub fn initVkSwapchain(
         }
     };
 
-    // Pick a supported composite alpha mode (X11 may not support OPAQUE)
+    // Pick a composite alpha mode supported by the current SDL video backend.
     const composite_alpha: u32 = blk: {
         const preferred = [_]u32{
             c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,

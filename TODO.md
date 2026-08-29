@@ -15,10 +15,6 @@
 
 ## Compatibility
 
-- [ ] **X11: no HiDPI / fractional scaling** (`x11.zig`): `fractional_scale` is hardcoded to 120 (1.0x). On HiDPI displays the app renders at 1x and looks tiny. At minimum, read `Xft.dpi` from X resources or `GDK_SCALE`/`QT_SCALE_FACTOR` env vars.
-- [ ] **Wayland: fractional scale without `wp_viewporter`** (`wayland.zig`): the app reads the fractional scale and adjusts the Vulkan swap extent, but never uses `wp_viewporter` to tell the compositor the actual buffer-to-surface mapping. The compositor may scale the surface incorrectly on fractional-scale displays.
-- [ ] **X11: no cursor management**: X11 backend never calls `xcb_change_window_attributes` or sets any cursor. The window inherits whatever the WM provides — likely the wrong cursor (no pointing hand on hover, etc).
-- [ ] **X11: no XKB new-keymap handling** (`x11.zig:425-435`): `handleXkbEvent` ignores the event type and only polls modifier state. If the user hot-plugs a keyboard or changes layout, the new keymap is never loaded — keys will be wrong.
 - [ ] **No PipeWire daemon reconnection**: if PipeWire restarts, the fd becomes invalid and the event loop silently stops processing audio events. No detection or reconnection logic exists.
 
 ## Code Quality / Simplification

@@ -2,32 +2,6 @@
   pkgs,
   ...
 }:
-let
-  # Build static (.a) versions of libraries for portable binary
-  wayland-static = pkgs.wayland.overrideAttrs (old: {
-    mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=both" ];
-  });
-
-  xkbcommon-static = pkgs.libxkbcommon.overrideAttrs (old: {
-    mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=both" ];
-  });
-
-  libffi-static = pkgs.libffi.overrideAttrs (old: {
-    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
-  });
-
-  libxcb-static = pkgs.libxcb.overrideAttrs (old: {
-    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
-  });
-
-  libxau-static = pkgs.libxau.overrideAttrs (old: {
-    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
-  });
-
-  libxdmcp-static = pkgs.libxdmcp.overrideAttrs (old: {
-    configureFlags = (old.configureFlags or []) ++ [ "--enable-static" ];
-  });
-in
 pkgs.stdenv.mkDerivation rec {
   pname = "pijpkijk";
 
@@ -43,7 +17,6 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.pkg-config
     pkgs.msdf-atlas-gen
     pkgs.patchelf
-    pkgs.wayland-scanner
   ];
 
   buildInputs = [
@@ -51,13 +24,7 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.vulkan-headers
     pkgs.vulkan-loader
     pkgs.pipewire.dev
-    wayland-static
-    pkgs.wayland-protocols
-    xkbcommon-static.dev
-    libffi-static
-    libxcb-static.dev
-    libxau-static.dev
-    libxdmcp-static.dev
+    pkgs.sdl3
   ];
 
   installPhase = ''
@@ -73,7 +40,7 @@ pkgs.stdenv.mkDerivation rec {
   postFixup = ''
     patchelf \
       --set-interpreter /lib64/ld-linux-x86-64.so.2 \
-      --set-rpath "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
+      --set-rpath "${pkgs.sdl3}/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
       $out/bin/pijpkijk
   '';
 
