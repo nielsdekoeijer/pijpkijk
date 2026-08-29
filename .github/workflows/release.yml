@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -21,34 +22,35 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Build release binary
-        run: nix develop -c bash -c 'export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d) && mkdir -p $ZIG_GLOBAL_CACHE_DIR/tmp && zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu.2.35'
-
-      - name: Patch binary for portability
-        run: |
-          nix develop -c patchelf \
-            --set-interpreter /lib64/ld-linux-x86-64.so.2 \
-            --set-rpath "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
-            --output zig-out/bin/pijpkijk-patched \
-            zig-out/bin/pijpkijk
-          mv zig-out/bin/pijpkijk-patched zig-out/bin/pijpkijk
+        run: nix build --print-build-logs
 
       - name: Verify portable linkage
         run: |
           echo "=== ldd ==="
-          ldd zig-out/bin/pijpkijk || true
+          ldd result/bin/pijpkijk || true
           echo "=== GLIBC versions required ==="
-          objdump -T zig-out/bin/pijpkijk | grep -oP 'GLIBC_\S+' | sort -uV
+          objdump -T result/bin/pijpkijk | grep -oP 'GLIBC_\S+' | sort -uV
           echo "=== ELF interpreter ==="
-          readelf -l zig-out/bin/pijpkijk | grep interpreter
+          readelf -l result/bin/pijpkijk | grep interpreter
           echo "=== RUNPATH ==="
-          readelf -d zig-out/bin/pijpkijk | grep -i runpath || true
+          readelf -d result/bin/pijpkijk | grep -i runpath || true
+          echo "=== Nix store references ==="
+          references="$(nix-store --query --references result)"
+          test -z "$references" || { echo "$references"; exit 1; }
 
       - name: Package binary
         run: |
           mkdir -p release
-          cp zig-out/bin/pijpkijk release/
+          cp result/bin/pijpkijk release/
           tar -czf pijpkijk-x86_64-linux.tar.gz -C release pijpkijk
 
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: pijpkijk-x86_64-linux
+          path: pijpkijk-x86_64-linux.tar.gz
+
       - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: pijpkijk-x86_64-linux.tar.gz

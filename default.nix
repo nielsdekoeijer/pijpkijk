@@ -1,20 +1,18 @@
 {
   pkgs,
+  zig-package,
   ...
 }:
-pkgs.stdenv.mkDerivation rec {
+zig-package {
   pname = "pijpkijk";
 
-  version = "0.9.0";
+  version = "0.9.1";
 
   src = ./.;
 
-  dontConfigure = true;
-  dontBuild = true;
+  zigTarget = "x86_64-linux-gnu.2.35";
 
   nativeBuildInputs = [
-    pkgs.zig
-    pkgs.pkg-config
     pkgs.msdf-atlas-gen
     pkgs.patchelf
   ];
@@ -26,17 +24,6 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.pipewire.dev
   ];
 
-  installPhase = ''
-    runHook preInstall
-
-    export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
-    mkdir -p $ZIG_GLOBAL_CACHE_DIR/tmp
-
-    zig build -Doptimize=ReleaseSafe --prefix $out install
-
-    runHook postInstall
-  '';
-
   postFixup = ''
     patchelf \
       --set-interpreter /lib64/ld-linux-x86-64.so.2 \
@@ -45,6 +32,4 @@ pkgs.stdenv.mkDerivation rec {
       $out/bin/pijpkijk
     mv $out/bin/pijpkijk-patched $out/bin/pijpkijk
   '';
-
-  outputs = [ "out" ];
 }

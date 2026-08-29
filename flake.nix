@@ -68,11 +68,17 @@
             })
           ];
         };
+
+        zig-package = pkgs.callPackage (pkgs.callPackage "${zig2nix}/src/package.nix" {
+          inherit (zig-env) zig target fromZON;
+          deriveLockFile = _: attrs: pkgs.callPackage ./build.zig.zon.nix attrs;
+        });
       in
       rec {
         # on `nix build` — portable FHS binary
         packages.default = pkgs.callPackage ./default.nix {
           inherit pkgs;
+          inherit zig-package;
         };
 
         # on `nix run` — run the portable binary on NixOS
