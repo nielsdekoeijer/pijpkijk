@@ -4,3 +4,4 @@ result
 *.spirv
 *.png
 *.json
+**/zig-pkg
