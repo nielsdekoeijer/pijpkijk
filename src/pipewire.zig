@@ -423,7 +423,7 @@ pub const PipewireHandle = struct {
                         .outs = .empty,
                         .mean_runtime_ns = null,
 
-                        .port_color = null,
+                        .port_color = types.VibrantColor.getColorByIndex(id),
                         .x = null,
                         .y = null,
                     });
@@ -894,6 +894,29 @@ pub const PipewireHandle = struct {
         return c.pw_loop_get_fd(self.loop);
     }
 
+    /// Assign default positions to nodes that have no position yet.
+    fn initNewNodes(self: *PipewireHandle) void {
+        var max_y: f32 = 0;
+        var node_it = self.nodes.iterator();
+        while (node_it.next()) |entry| {
+            if (entry.value_ptr.y) |y| {
+                const bottom = y + entry.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
+                if (bottom > max_y) max_y = bottom;
+            }
+        }
+
+        node_it = self.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node = entry.value_ptr;
+            if (node.x == null) node.x = 0;
+            if (node.y == null) {
+                node.y = max_y;
+                max_y += node.computeNodeHeight() + types.H_NODE_SPACING;
+            }
+            if (node.z == null) node.z = @floatFromInt(99999 - node.node_id);
+        }
+    }
+
     /// Drain all events from the registry
     pub fn drain(self: *PipewireHandle, auto_layout: bool) !void {
         try handleError(
@@ -903,6 +926,8 @@ pub const PipewireHandle = struct {
         if (self.nodes_dirty) {
             if (auto_layout) {
                 try self.update_graph_metadata();
+            } else {
+                self.initNewNodes();
             }
             self.nodes_dirty = false;
         }
