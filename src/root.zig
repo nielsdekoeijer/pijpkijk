@@ -80,6 +80,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
         // Layout
         auto_layout: bool = true,
+        z_front_counter: f32 = 0,
 
         // Search state
         search_mode: SearchMode = .none,
@@ -796,6 +797,10 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
                                     if (best_node) |node_id| {
                                         self.selected_node = node_id;
+                                        self.z_front_counter -= 1;
+                                        if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
+                                            node.z = self.z_front_counter;
+                                        }
                                     } else {
                                         self.drag_start = .{ world_x, world_y };
                                     }
