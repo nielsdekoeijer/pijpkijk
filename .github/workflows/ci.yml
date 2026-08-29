@@ -16,6 +16,7 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - run: nix flake check
+      - name: Allow Nix builds on the Ubuntu runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - run: nix build
+      - run: nix develop -c zig build

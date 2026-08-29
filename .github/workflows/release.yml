@@ -17,12 +17,16 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - run: nix build
+      - name: Allow Nix builds on the Ubuntu runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Build release binary
+        run: nix develop -c zig build -Doptimize=ReleaseSafe
 
       - name: Package binary
         run: |
           mkdir -p release
-          cp result/bin/pijpkijk release/
+          cp zig-out/bin/pijpkijk release/
           tar -czf pijpkijk-x86_64-linux.tar.gz -C release pijpkijk
 
       - uses: softprops/action-gh-release@v2

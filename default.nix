@@ -5,7 +5,7 @@
 pkgs.stdenv.mkDerivation rec {
   pname = "pijpkijk";
 
-  version = "0.8.0";
+  version = "0.8.1";
 
   src = ./.;
 
@@ -24,7 +24,6 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.vulkan-headers
     pkgs.vulkan-loader
     pkgs.pipewire.dev
-    pkgs.sdl3
   ];
 
   installPhase = ''
@@ -40,7 +39,7 @@ pkgs.stdenv.mkDerivation rec {
   postFixup = ''
     patchelf \
       --set-interpreter /lib64/ld-linux-x86-64.so.2 \
-      --set-rpath "${pkgs.sdl3}/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
+      --set-rpath "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
       $out/bin/pijpkijk
   '';
 

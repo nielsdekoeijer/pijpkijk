@@ -61,7 +61,7 @@ fn addMsdfAtlasGenStep(b: *std.Build, font_src: []const u8, out_png: []const u8,
 }
 
 pub fn build(b: *std.Build) void {
-    const version = "0.8.0";
+    const version = "0.8.1";
 
     const target = b.standardTargetOptions(.{
         .default_target = .{
@@ -150,11 +150,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
-    mod.linkSystemLibrary("sdl3", .{
-        .needed = true,
-        .preferred_link_mode = .dynamic,
-        .use_pkg_config = .yes,
+    const sdl = b.dependency("sdl", .{
+        .target = target,
+        .optimize = optimize,
     });
+    mod.linkLibrary(sdl.artifact("SDL3"));
     mod.linkSystemLibrary("vulkan", .{
         .needed = true,
         .preferred_link_mode = .dynamic,

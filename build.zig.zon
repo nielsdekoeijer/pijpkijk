@@ -4,6 +4,10 @@
     .fingerprint = 0x69b2306c5647189b,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
+        .sdl = .{
+            .url = "git+https://github.com/allyourcodebase/SDL#acc6514a8d4d1053ac43509a696c9407b4cd3288",
+            .hash = "sdl-1.0.2+3.4.14-i4QD0VWwqQAzetcBsleJjCv-Vc70T2tNWdowcZvl7I6d",
+        },
     },
     .paths = .{
         "build.zig",
