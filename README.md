@@ -48,6 +48,19 @@ nix develop -c zig build
 nix run
 ```
 
+### Remote PipeWire host
+
+Pass an IP address to forward the remote PipeWire socket over SSH. IP addresses
+use the `root` user by default; pass `user@host` to select another user.
+
+```sh
+pijpkijk 192.168.1.52
+pijpkijk user@example.net
+```
+
+SSH key authentication must already be configured. The SSH process and its
+temporary Unix socket are removed when pijpkijk exits.
+
 ## Controls
 
 ### Keyboard

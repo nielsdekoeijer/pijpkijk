@@ -10,6 +10,11 @@ zig-package {
 
   src = ./.;
 
+  zigBuildFlags = [
+    "-Doptimize=ReleaseSafe"
+    "-Dssh-path=${pkgs.lib.getExe pkgs.openssh}"
+  ];
+
   nativeBuildInputs = [
     pkgs.msdf-atlas-gen
     pkgs.patchelf

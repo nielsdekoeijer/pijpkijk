@@ -143,13 +143,19 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
+    options.addOption(
+        []const u8,
+        "ssh_path",
+        b.option([]const u8, "ssh-path", "Path to the SSH client") orelse "ssh",
+    );
+    const options_module = options.createModule();
 
     const mod = b.addModule("pijpkijk", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .link_libc = true,
     });
-    mod.addOptions("build_options", options);
+    mod.addImport("build_options", options_module);
     const sdl = b.dependency("sdl", .{
         .target = target,
         .optimize = optimize,
@@ -188,6 +194,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "pijpkijk", .module = mod },
+                .{ .name = "build_options", .module = options_module },
             },
         }),
     });
