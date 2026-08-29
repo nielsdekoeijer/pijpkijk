@@ -4,11 +4,13 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     utils.url = "github:numtide/flake-utils";
-    zig-flake.url = "github:mitchellh/zig-overlay";
-    zls-flake = {
-      url = "github:zigtools/zls?ref=0.16.0";
+
+    zig2nix = {
+      url = "github:Cloudef/zig2nix";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "utils";
     };
+
     msdf-atlas-gen = {
       url = "git+https://github.com/Chlumsky/msdf-atlas-gen?submodules=1";
       flake = false;
@@ -20,13 +22,17 @@
       self,
       nixpkgs,
       utils,
-      zig-flake,
-      zls-flake,
+      zig2nix,
       msdf-atlas-gen,
     }:
     utils.lib.eachDefaultSystem (
       system:
       let
+        zig-env = zig2nix.outputs.zig-env.${system} {
+          inherit nixpkgs;
+          zig = zig2nix.outputs.packages.${system}.zig-0_16_0;
+        };
+
         # packages for the given system
         # Note: shader-slang (slangc) comes from nixpkgs, which is pinned via
         # flake.lock. Updating slangc requires `nix flake update nixpkgs`.
@@ -34,10 +40,7 @@
           inherit system;
           overlays = [
             (final: prev: {
-              zig = zig-flake.packages.${system}."0.16.0";
-              zls = zls-flake.packages.${system}.default.overrideAttrs (old: {
-                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.zig ];
-              });
+              inherit (zig-env) zig zls;
               msdf-atlas-gen = prev.stdenv.mkDerivation {
                 pname = "msdf-atlas-gen";
                 version = "git";
