@@ -6,24 +6,42 @@ Built with Zig, SDL3, Vulkan, and PipeWire.
 
 ## Install
 
+### Pre-built binary (recommended)
+
+Download the latest release from [Releases](https://github.com/nielsdekoeijer/pijpkijk/releases).
+
+```sh
+tar -xzf pijpkijk-x86_64-linux.tar.gz
+./pijpkijk
+```
+
+Requires glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 36+, Arch).
+
+#### Runtime dependencies
+
+Ubuntu / Debian:
+```sh
+sudo apt install libvulkan1 pipewire
+```
+
+Arch:
+```sh
+sudo pacman -S vulkan-icd-loader pipewire
+```
+
+A Vulkan-capable GPU driver must also be installed (e.g. `mesa-vulkan-drivers` on Ubuntu, `vulkan-radeon` or `vulkan-intel` on Arch).
+
+### Build from source (Nix)
+
 Requires [Nix](https://nixos.org/) with flakes enabled.
 
 ```sh
-# Build
-nix build
+# Development build
+nix develop -c zig build
 
-# Run (NixOS)
+# Run on NixOS
 nix run
-
-# Run (non-NixOS, after nix build)
-./result/bin/pijpkijk
 ```
-
-## Runtime dependencies
-
-- SDL3-supported desktop environment
-- PipeWire (running)
-- Vulkan-capable GPU + driver
 
 ## Controls
 
