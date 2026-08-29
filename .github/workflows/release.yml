@@ -22,7 +22,7 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Build release binary
-        run: nix build --print-build-logs
+        run: nix build .#release --print-build-logs
 
       - name: Verify portable linkage
         run: |

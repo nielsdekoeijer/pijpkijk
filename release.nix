@@ -10,6 +10,8 @@ zig-package {
 
   src = ./.;
 
+  zigTarget = "x86_64-linux-gnu.2.35";
+
   nativeBuildInputs = [
     pkgs.msdf-atlas-gen
     pkgs.patchelf
@@ -24,20 +26,8 @@ zig-package {
 
   postFixup = ''
     patchelf \
-      --set-interpreter ${pkgs.stdenv.cc.bintools.dynamicLinker} \
-      --set-rpath "${pkgs.lib.makeLibraryPath [
-        pkgs.alsa-lib
-        pkgs.libdecor
-        pkgs.libusb1
-        pkgs.libxkbcommon
-        pkgs.vulkan-loader
-        pkgs.wayland
-        pkgs.libx11
-        pkgs.libxext
-        pkgs.libxi
-        pkgs.udev
-        pkgs.pipewire
-      ]}" \
+      --set-interpreter /lib64/ld-linux-x86-64.so.2 \
+      --set-rpath "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib" \
       --output $out/bin/pijpkijk-patched \
       $out/bin/pijpkijk
     mv $out/bin/pijpkijk-patched $out/bin/pijpkijk

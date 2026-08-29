@@ -75,36 +75,22 @@
         });
       in
       rec {
-        # on `nix build` — portable FHS binary
+        # on `nix build` — Nix-native package
         packages.default = pkgs.callPackage ./default.nix {
           inherit pkgs;
           inherit zig-package;
         };
 
-        # on `nix run` — run the portable binary on NixOS
-        apps.default =
-          let
-            wrapper = pkgs.writeShellScript "pijpkijk-wrapper" ''
-              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
-                pkgs.alsa-lib
-                pkgs.libdecor
-                pkgs.libusb1
-                pkgs.libxkbcommon
-                pkgs.vulkan-loader
-                pkgs.wayland
-                pkgs.libx11
-                pkgs.libxext
-                pkgs.libxi
-                pkgs.udev
-                pkgs.pipewire
-              ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              exec ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 ${packages.default}/bin/pijpkijk "$@"
-            '';
-          in
-          {
-            type = "app";
-            program = "${wrapper}";
-          };
+        # GitHub release artifact for non-Nix Linux systems.
+        packages.release = pkgs.callPackage ./release.nix {
+          inherit pkgs;
+          inherit zig-package;
+        };
+
+        apps.default = {
+          type = "app";
+          program = pkgs.lib.getExe packages.default;
+        };
 
         # on `nix develop`
         devShells.default = pkgs.callPackage ./shell.nix {
