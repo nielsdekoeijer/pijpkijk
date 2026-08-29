@@ -8,11 +8,11 @@ pub const c = @cImport({
 
     // Nasty hack: why is pipewire so fucking awful? Weird API
     @cDefine("_Static_assert(...)", {});
-    @cInclude("pipewire-0.3/pipewire/pipewire.h");
-    @cInclude("pipewire-0.3/pipewire/extensions/profiler.h");
-    @cInclude("pipewire-0.3/pipewire/impl-module.h");
-    @cInclude("spa-0.2/spa/param/profiler.h");
-    @cInclude("spa-0.2/spa/pod/parser.h");
-    @cInclude("spa-0.2/spa/pod/iter.h");
-    @cInclude("spa-0.2/spa/param/latency-utils.h");
+    @cInclude("pipewire/pipewire.h");
+    @cInclude("pipewire/extensions/profiler.h");
+    @cInclude("pipewire/impl-module.h");
+    @cInclude("spa/param/profiler.h");
+    @cInclude("spa/pod/parser.h");
+    @cInclude("spa/pod/iter.h");
+    @cInclude("spa/param/latency-utils.h");
 });

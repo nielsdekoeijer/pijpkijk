@@ -24,6 +24,7 @@ pkgs.mkShell rec {
     pkgs.msdf-atlas-gen
     pkgs.pipewire.dev
     pkgs.pkg-config
+    pkgs.patchelf
   ];
 
   shellHook = ''

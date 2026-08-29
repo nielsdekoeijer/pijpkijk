@@ -19,4 +19,5 @@ jobs:
       - name: Allow Nix builds on the Ubuntu runner
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - run: nix develop -c zig build
+      - name: Build
+        run: nix develop -c bash -c 'export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d) && mkdir -p $ZIG_GLOBAL_CACHE_DIR/tmp && zig build'

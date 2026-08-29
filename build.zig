@@ -61,7 +61,7 @@ fn addMsdfAtlasGenStep(b: *std.Build, font_src: []const u8, out_png: []const u8,
 }
 
 pub fn build(b: *std.Build) void {
-    const version = "0.8.1";
+    const version = "0.8.2";
 
     const target = b.standardTargetOptions(.{
         .default_target = .{
@@ -191,6 +191,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    exe.linker_allow_shlib_undefined = true;
 
     exe.step.dependOn(slang_step);
 
