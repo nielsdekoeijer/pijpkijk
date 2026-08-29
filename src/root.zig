@@ -643,7 +643,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                             const mouse_x = self.window_handle.state.input.mouse_x orelse 0.0;
                             const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
 
-                            const zoom_factor = 1.0 - (self.window_handle.state.input.scroll_y * 0.02);
+                            const zoom_factor = 1.0 - (self.window_handle.state.input.scroll_y * 0.08);
 
                             const world_x_before = (mouse_x / self.scale) + self.camera_pos[0];
                             const world_y_before = (mouse_y / self.scale) + self.camera_pos[1];
@@ -684,8 +684,12 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                     }
 
                     if (self.window_handle.state.input.mouse_down_r) {
-                        self.camera_pos[0] -= self.window_handle.state.input.mouse_dx / self.scale;
-                        self.camera_pos[1] -= self.window_handle.state.input.mouse_dy / self.scale;
+                        if (self.port_drag != null) {
+                            self.port_drag = null;
+                        } else {
+                            self.camera_pos[0] -= self.window_handle.state.input.mouse_dx / self.scale;
+                            self.camera_pos[1] -= self.window_handle.state.input.mouse_dy / self.scale;
+                        }
                         needs_render = true;
                     }
 
