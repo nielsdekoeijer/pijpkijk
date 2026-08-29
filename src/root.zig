@@ -80,7 +80,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
         // Layout
         auto_layout: bool = true,
-        z_front_counter: f32 = 0,
+        z_front_counter: f32 = 99998,
 
         // Search state
         search_mode: SearchMode = .none,
