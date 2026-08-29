@@ -895,13 +895,15 @@ pub const PipewireHandle = struct {
     }
 
     /// Drain all events from the registry
-    pub fn drain(self: *PipewireHandle) !void {
+    pub fn drain(self: *PipewireHandle, auto_layout: bool) !void {
         try handleError(
             c.pw_loop_iterate(self.loop, 0),
         );
 
         if (self.nodes_dirty) {
-            try self.update_graph_metadata();
+            if (auto_layout) {
+                try self.update_graph_metadata();
+            }
             self.nodes_dirty = false;
         }
     }

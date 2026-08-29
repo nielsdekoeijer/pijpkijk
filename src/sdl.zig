@@ -20,6 +20,7 @@ pub const SDLHandle = struct {
             key_d: ?KeyState = null,
             key_q: ?KeyState = null,
             key_r: ?KeyState = null,
+            key_l: ?KeyState = null,
             key_delete: ?KeyState = null,
             key_question: ?KeyState = null,
             key_slash: ?KeyState = null,
@@ -183,6 +184,7 @@ pub const SDLHandle = struct {
             c.SDL_SCANCODE_D => input.key_d = value,
             c.SDL_SCANCODE_Q => input.key_q = value,
             c.SDL_SCANCODE_R => input.key_r = value,
+            c.SDL_SCANCODE_L => input.key_l = value,
             c.SDL_SCANCODE_H => input.key_h = value,
             c.SDL_SCANCODE_DELETE => input.key_delete = value,
             c.SDL_SCANCODE_SLASH => if (input.shift_held) {

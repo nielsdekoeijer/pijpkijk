@@ -57,6 +57,7 @@ nix run
 | `?`      | Show help overlay (hold)      |
 | `Q`      | Quit                          |
 | `R`      | Re-layout graph               |
+| `L`      | Toggle auto-layout            |
 | `Delete` | Delete selected connections   |
 | `Escape` | Deselect / cancel drag        |
 

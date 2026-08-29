@@ -78,6 +78,9 @@ pub fn AppImpl(comptime BackendHandle: type) type {
         drag_start: ?[2]f32 = null,
         port_drag: ?PortDragState = null,
 
+        // Layout
+        auto_layout: bool = true,
+
         // Search state
         search_mode: SearchMode = .none,
         search_buf: [128]u8 = undefined,
@@ -587,7 +590,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
                                 // Check if poll input...
                                 if ((revents & std.posix.POLL.IN) != 0) {
-                                    try self.pipewire_handle.drain();
+                                    try self.pipewire_handle.drain(self.auto_layout);
 
                                     needs_state_update = true;
                                 }
@@ -997,6 +1000,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         // Consume normal-mode keys so they don't leak when search closes
                         self.window_handle.state.input.key_q = null;
                         self.window_handle.state.input.key_r = null;
+                        self.window_handle.state.input.key_l = null;
                         self.window_handle.state.input.key_h = null;
                         self.window_handle.state.input.key_delete = null;
                         self.window_handle.state.input.key_greater = null;
@@ -1034,6 +1038,12 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         if (self.window_handle.state.input.key_r) |key_r| {
                             if (key_r == .PRESSED) {
                                 try self.pipewire_handle.update_graph_metadata();
+                            }
+                        }
+
+                        if (self.window_handle.state.input.key_l) |key_l| {
+                            if (key_l == .PRESSED) {
+                                self.auto_layout = !self.auto_layout;
                             }
                         }
 
@@ -1423,6 +1433,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                     .{ "<", "Search input port & connect" },
                                     .{ "Q", "Quit" },
                                     .{ "R", "Re-layout graph" },
+                                    .{ "L", "Toggle auto-layout" },
                                     .{ "Delete", "Delete selected connections" },
                                     .{ "Escape", "Deselect / cancel" },
                                 };
