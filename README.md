@@ -24,9 +24,14 @@ Ubuntu / Debian:
 sudo apt install libvulkan1 pipewire
 ```
 
-Arch:
+Arch (pacman):
 ```sh
 sudo pacman -S vulkan-icd-loader pipewire
+```
+
+Arch (paru / yay):
+```sh
+paru -S vulkan-icd-loader pipewire
 ```
 
 A Vulkan-capable GPU driver must also be installed (e.g. `mesa-vulkan-drivers` on Ubuntu, `vulkan-radeon` or `vulkan-intel` on Arch).
