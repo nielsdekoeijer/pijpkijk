@@ -926,9 +926,11 @@ pub const PipewireHandle = struct {
         if (self.nodes_dirty) {
             if (auto_layout) {
                 try self.update_graph_metadata();
-            } else {
-                self.initNewNodes();
             }
+
+            // Always ensure new nodes have positions (even if auto_layout
+            // already ran — initNewNodes is a no-op for nodes with positions)
+            self.initNewNodes();
             self.nodes_dirty = false;
         }
     }

@@ -80,7 +80,6 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
         // Layout
         auto_layout: bool = true,
-        z_front_counter: f32 = 99998,
 
         // Search state
         search_mode: SearchMode = .none,
@@ -520,6 +519,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
             self.selected_node = null;
             self.drag_start = null;
             self.port_drag = null;
+            self.auto_layout = true;
 
             self.search_mode = .none;
             self.search_len = 0;
@@ -594,6 +594,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                     try self.pipewire_handle.drain(self.auto_layout);
 
                                     needs_state_update = true;
+                                    needs_render = true;
                                 }
                             }
 
@@ -797,9 +798,16 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
                                     if (best_node) |node_id| {
                                         self.selected_node = node_id;
-                                        self.z_front_counter -= 1;
+                                        // Bring to front: find min z across all nodes, go below it
+                                        var min_z: f32 = std.math.inf(f32);
+                                        var zit = self.pipewire_handle.nodes.iterator();
+                                        while (zit.next()) |entry| {
+                                            if (entry.value_ptr.z) |z| {
+                                                if (z < min_z) min_z = z;
+                                            }
+                                        }
                                         if (self.pipewire_handle.nodes.getPtr(@intCast(node_id))) |node| {
-                                            node.z = self.z_front_counter;
+                                            node.z = @max(min_z - 1, 1);
                                         }
                                     } else {
                                         self.drag_start = .{ world_x, world_y };
@@ -1234,12 +1242,14 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         {
                             var node_it = self.pipewire_handle.nodes.iterator();
                             while (node_it.next()) |node| {
+                                if (node.value_ptr.x == null or node.value_ptr.y == null or node.value_ptr.z == null or node.value_ptr.port_color == null) continue;
                                 try node.value_ptr.appendVerticesNode(self.allocator, &quad_vertices);
                             }
                         }
                         {
                             var node_it = self.pipewire_handle.nodes.iterator();
                             while (node_it.next()) |node| {
+                                if (node.value_ptr.x == null or node.value_ptr.y == null or node.value_ptr.z == null or node.value_ptr.port_color == null) continue;
                                 try node.value_ptr.appendVerticesPorts(self.allocator, &quad_vertices);
                             }
                         }
@@ -1334,6 +1344,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                     {
                         var node_it = self.pipewire_handle.nodes.iterator();
                         while (node_it.next()) |node| {
+                            if (node.value_ptr.x == null or node.value_ptr.y == null or node.value_ptr.z == null) continue;
                             try node.value_ptr.appendVerticesLinks(
                                 self.allocator,
                                 self.pipewire_handle.nodes,
@@ -1409,6 +1420,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                     {
                         var node_it = self.pipewire_handle.nodes.iterator();
                         while (node_it.next()) |node| {
+                            if (node.value_ptr.x == null or node.value_ptr.y == null or node.value_ptr.z == null or node.value_ptr.port_color == null) continue;
                             try node.value_ptr.appendVerticesText(self.allocator, self.font_atlas, &text_vertices);
                         }
 
