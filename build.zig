@@ -61,7 +61,7 @@ fn addMsdfAtlasGenStep(b: *std.Build, font_src: []const u8, out_png: []const u8,
 }
 
 pub fn build(b: *std.Build) void {
-    const version = "0.11.0";
+    const version = "0.11.1";
 
     const target = b.standardTargetOptions(.{
         .default_target = .{

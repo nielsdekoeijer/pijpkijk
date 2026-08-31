@@ -132,7 +132,7 @@ pub const SDLHandle = struct {
             self.state.width = @intCast(@max(width, 1));
             self.state.height = @intCast(@max(height, 1));
         }
-        const scale = c.SDL_GetWindowDisplayScale(self.window);
+        const scale = c.SDL_GetWindowPixelDensity(self.window);
         if (scale > 0) self.state.fractional_scale = @intFromFloat(scale * 120.0);
     }
 
