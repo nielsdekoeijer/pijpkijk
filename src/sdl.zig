@@ -58,7 +58,7 @@ pub const SDLHandle = struct {
             "pijpkijk",
             800,
             600,
-            c.SDL_WINDOW_VULKAN | c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY,
+            c.SDL_WINDOW_VULKAN | c.SDL_WINDOW_RESIZABLE,
         ) orelse return sdlError("SDL_CreateWindow");
 
         self.* = .{ .window = window };
