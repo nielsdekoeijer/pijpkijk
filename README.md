@@ -71,6 +71,7 @@ temporary Unix socket are removed when pijpkijk exits.
 | `Q`      | Quit                          |
 | `R`      | Re-layout graph               |
 | `L`      | Toggle auto-layout            |
+| `P`      | Toggle profiling colors       |
 | `Delete` | Delete selected connections   |
 | `Escape` | Deselect / cancel drag        |
 

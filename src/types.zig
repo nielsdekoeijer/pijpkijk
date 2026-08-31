@@ -616,6 +616,29 @@ pub const PipewireNode = struct {
     /// Standard color of the node
     pub const NODE_COLOR: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
 
+    /// Tint the node interior from green to red according to its runtime
+    /// relative to the other currently profiled nodes. Null bounds disable
+    /// the visualization, while equal runtimes remain neutral gray.
+    fn runtimeFillColor(self: PipewireNode, runtime_min_ns: ?f32, runtime_max_ns: ?f32) [4]f32 {
+        const runtime = self.mean_runtime_ns orelse return NODE_COLOR;
+        const min = runtime_min_ns orelse return NODE_COLOR;
+        const max = runtime_max_ns orelse return NODE_COLOR;
+        const range = max - min;
+        if (range <= std.math.floatEps(f32)) return NODE_COLOR;
+
+        const load = std.math.clamp((runtime - min) / range, 0.0, 1.0);
+        const low = [3]f32{ 0.08, 0.42, 0.16 };
+        const high = [3]f32{ 0.58, 0.08, 0.08 };
+        const tint: f32 = 0.55;
+
+        var color = NODE_COLOR;
+        inline for (0..3) |channel| {
+            const load_color = low[channel] + (high[channel] - low[channel]) * load;
+            color[channel] += (load_color - color[channel]) * tint;
+        }
+        return color;
+    }
+
     /// Fixed width of the node
     pub const W_NODE: f32 = 400.0;
 
@@ -685,6 +708,8 @@ pub const PipewireNode = struct {
         self: PipewireNode,
         allocator: std.mem.Allocator,
         list: *std.ArrayListUnmanaged(QuadVertex),
+        runtime_min_ns: ?f32,
+        runtime_max_ns: ?f32,
     ) !void {
         const H_NODE = self.computeNodeHeight();
 
@@ -695,7 +720,7 @@ pub const PipewireNode = struct {
         try QuadVertex.append(allocator, list, self.x.? - 2, self.y.? - 2, self.z.? + 0.4, W_NODE + 4, H_NODE + 4, border_color, border_radii);
 
         // Fill quad
-        const color: [4]f32 = .{ 0.2, 0.2, 0.2, 1.0 };
+        const color = self.runtimeFillColor(runtime_min_ns, runtime_max_ns);
         const radii: [4]f32 = .{ 10.0, 10.0, 10.0, 10.0 };
         try QuadVertex.append(allocator, list, self.x.?, self.y.?, self.z.? + 0.3, W_NODE, H_NODE, color, radii);
     }
@@ -847,7 +872,7 @@ pub const PipewireNode = struct {
                     if ((curr[0] >= min_x and curr[0] <= max_x and
                         curr[1] >= min_y and curr[1] <= max_y) or
                         (prev[0] >= min_x and prev[0] <= max_x and
-                        prev[1] >= min_y and prev[1] <= max_y))
+                            prev[1] >= min_y and prev[1] <= max_y))
                     {
                         found = true;
                         break;

@@ -81,6 +81,9 @@ pub fn AppImpl(comptime BackendHandle: type) type {
         // Layout
         auto_layout: bool = true,
 
+        // Profiling visualization
+        show_profile_load: bool = false,
+
         // Search state
         search_mode: SearchMode = .none,
         search_buf: [128]u8 = undefined,
@@ -520,6 +523,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
             self.drag_start = null;
             self.port_drag = null;
             self.auto_layout = true;
+            self.show_profile_load = false;
 
             self.search_mode = .none;
             self.search_len = 0;
@@ -1014,6 +1018,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                         self.window_handle.state.input.key_q = null;
                         self.window_handle.state.input.key_r = null;
                         self.window_handle.state.input.key_l = null;
+                        self.window_handle.state.input.key_p = null;
                         self.window_handle.state.input.key_h = null;
                         self.window_handle.state.input.key_delete = null;
                         self.window_handle.state.input.key_greater = null;
@@ -1058,6 +1063,14 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                             if (key_l == .PRESSED) {
                                 self.auto_layout = !self.auto_layout;
                             }
+                        }
+
+                        if (self.window_handle.state.input.key_p) |key_p| {
+                            if (key_p == .PRESSED) {
+                                self.show_profile_load = !self.show_profile_load;
+                                needs_render = true;
+                            }
+                            self.window_handle.state.input.key_p = null;
                         }
 
                         if (self.window_handle.state.input.key_delete) |key_delete| {
@@ -1239,11 +1252,21 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                     defer quad_vertices.deinit(self.allocator);
                     var overlay_vertex_count: u32 = 0;
                     {
+                        var runtime_min_ns: ?f32 = null;
+                        var runtime_max_ns: ?f32 = null;
+                        if (self.show_profile_load) {
+                            var node_it = self.pipewire_handle.nodes.iterator();
+                            while (node_it.next()) |node| {
+                                const runtime = node.value_ptr.mean_runtime_ns orelse continue;
+                                runtime_min_ns = @min(runtime_min_ns orelse runtime, runtime);
+                                runtime_max_ns = @max(runtime_max_ns orelse runtime, runtime);
+                            }
+                        }
                         {
                             var node_it = self.pipewire_handle.nodes.iterator();
                             while (node_it.next()) |node| {
                                 if (node.value_ptr.x == null or node.value_ptr.y == null or node.value_ptr.z == null or node.value_ptr.port_color == null) continue;
-                                try node.value_ptr.appendVerticesNode(self.allocator, &quad_vertices);
+                                try node.value_ptr.appendVerticesNode(self.allocator, &quad_vertices, runtime_min_ns, runtime_max_ns);
                             }
                         }
                         {
@@ -1279,7 +1302,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                 const sw: f32 = @floatFromInt(self.window_handle.state.width);
                                 const sh: f32 = @floatFromInt(self.window_handle.state.height);
                                 const overlay_w: f32 = 620.0;
-                                const overlay_h: f32 = 576.0;
+                                const overlay_h: f32 = 604.0;
                                 const ox = ((sw - overlay_w) / 2.0) / self.scale + self.camera_pos[0];
                                 const oy = ((sh - overlay_h) / 2.0) / self.scale + self.camera_pos[1];
                                 const ow = overlay_w / self.scale;
@@ -1451,6 +1474,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                     .{ "Q", "Quit" },
                                     .{ "R", "Re-layout graph" },
                                     .{ "L", "Toggle auto-layout" },
+                                    .{ "P", "Toggle profiling colors" },
                                     .{ "Delete", "Delete selected connections" },
                                     .{ "Escape", "Deselect / cancel" },
                                 };
