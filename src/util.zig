@@ -253,7 +253,7 @@ pub fn initVkInstance(
                 .applicationVersion = c.VK_MAKE_VERSION(1, 0, 0),
                 .pEngineName = "engine",
                 .engineVersion = c.VK_MAKE_VERSION(1, 0, 0),
-                .apiVersion = c.VK_API_VERSION_1_0,
+                .apiVersion = c.VK_API_VERSION_1_1,
             },
 
             // pass our layers

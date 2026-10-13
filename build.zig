@@ -180,6 +180,10 @@ pub fn build(b: *std.Build) void {
         b.path("./src/"),
     );
     mod.addCSourceFile(.{
+        .file = b.path("src/latency.c"),
+        .flags = &.{"-O2"},
+    });
+    mod.addCSourceFile(.{
         .file = b.path("src/stb/stb_image.c"),
         .flags = &[_][]const u8{
             "-O3",

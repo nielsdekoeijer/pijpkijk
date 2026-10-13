@@ -1,7 +1,11 @@
 const std = @import("std");
 const c = @import("c.zig").c;
 const types = @import("types.zig");
+const latency = @import("latency.zig");
 const handleError = @import("error.zig").handleError;
+
+extern "c" fn pijpkijk_latency_parse(pod: *const c.spa_pod, info: *c.spa_latency_info) c_int;
+extern "c" fn pijpkijk_profiler_clock_parse(pod: *const c.spa_pod, rate: *c.spa_fraction, quantum: *u64) c_int;
 
 pub const PipewireNode = struct {
     name: []const u8,
@@ -28,8 +32,27 @@ pub const PipewireLink = struct {
 const PortListenerData = struct {
     handle: *PipewireHandle,
     node_id: u32,
+    port_id: u32,
     is_inp: bool,
+    proxy: ?*c.pw_port = null,
     listener: c.spa_hook = std.mem.zeroes(c.spa_hook),
+
+    fn deinit(self: *PortListenerData) void {
+        if (self.proxy) |proxy| c.pw_proxy_destroy(@ptrCast(proxy));
+        self.handle.allocator.destroy(self);
+    }
+};
+
+const NodeListenerData = struct {
+    handle: *PipewireHandle,
+    node_id: u32,
+    proxy: ?*c.pw_node = null,
+    listener: c.spa_hook = std.mem.zeroes(c.spa_hook),
+
+    fn deinit(self: *NodeListenerData) void {
+        if (self.proxy) |proxy| c.pw_proxy_destroy(@ptrCast(proxy));
+        self.handle.allocator.destroy(self);
+    }
 };
 
 /// A handle for interacting with pipewire
@@ -47,8 +70,10 @@ pub const PipewireHandle = struct {
     /// pipewire. This isn't very good in my perspective. I should change that.
     nodes: std.AutoArrayHashMapUnmanaged(u32, types.PipewireNode) = .empty,
     nodes_dirty: bool = true,
+    latency_labels_dirty: bool = true,
 
     port_listeners: std.ArrayListUnmanaged(*PortListenerData) = .empty,
+    node_listeners: std.ArrayListUnmanaged(*NodeListenerData) = .empty,
 
     const ProfilerRegistry = struct {
         /// Handle the spa messages coming from pipewire containing the profiling information
@@ -68,6 +93,12 @@ pub const PipewireHandle = struct {
             while (c.spa_pod_is_inside(pod_ptr, pod_size, pod_iter)) {
                 if (c.spa_pod_is_object_type(pod_iter, c.SPA_TYPE_OBJECT_Profiler)) {
                     const prop = @as([*c]const c.spa_pod_object, @ptrCast(pod_iter));
+                    var clock_rate: c.spa_fraction = undefined;
+                    var clock_quantum: u64 = undefined;
+                    const graph_clock: ?latency.Clock = if (pijpkijk_profiler_clock_parse(pod_iter, &clock_rate, &clock_quantum) >= 0)
+                        .{ .rate_num = clock_rate.num, .rate_denom = clock_rate.denom, .quantum = clock_quantum }
+                    else
+                        null;
 
                     var prop_iter = c.spa_pod_prop_first(&prop.*.body);
                     while (c.spa_pod_prop_is_inside(&prop.*.body, prop.*.pod.size, prop_iter)) {
@@ -115,10 +146,20 @@ pub const PipewireHandle = struct {
                                     field_iter = @ptrCast(@alignCast(c.spa_pod_next(field_iter)));
                                 }
 
-                                // We're safe to use the optionals here as
-                                if (self.nodes.getPtr(id.?)) |node| {
-                                    if (finish.? >= awake.?) {
-                                        const duration_ns = @as(f32, @floatFromInt(finish.? - awake.?));
+                                const node_id = id orelse break :prop_loop;
+                                const start = awake orelse break :prop_loop;
+                                const end = finish orelse break :prop_loop;
+                                if (self.nodes.getPtr(node_id)) |node| {
+                                    const clock = if (node.running) graph_clock else null;
+                                    if (!std.meta.eql(node.clock, clock)) {
+                                        node.clock = clock;
+                                        self.latency_labels_dirty = true;
+                                        if (clock) |timing| std.log.debug("Latency clock node={} quantum={} rate={}/{}", .{
+                                            node_id, timing.quantum, timing.rate_num, timing.rate_denom,
+                                        });
+                                    }
+                                    if (end >= start) {
+                                        const duration_ns = @as(f32, @floatFromInt(end - start));
                                         if (node.mean_runtime_ns) |*runtime_ns| {
                                             node.mean_runtime_ns = runtime_ns.* * 0.95 + duration_ns * 0.05;
                                         } else {
@@ -150,52 +191,67 @@ pub const PipewireHandle = struct {
     };
 
     const PortEvents = struct {
+        fn onInfo(data: ?*anyopaque, info: [*c]const c.pw_port_info) callconv(.c) void {
+            if (info == null or info.*.change_mask & c.PW_PORT_CHANGE_MASK_PARAMS == 0) return;
+            for (0..info.*.n_params) |i| {
+                const param = info.*.params[i];
+                if (param.id == c.SPA_PARAM_Latency and param.flags & c.SPA_PARAM_INFO_READ != 0) return;
+            }
+            onParam(data, 0, c.SPA_PARAM_Latency, 0, 0, null);
+        }
+
         fn onParam(data: ?*anyopaque, _: c_int, id: u32, _: u32, _: u32, param_pod: [*c]const c.spa_pod) callconv(.c) void {
             if (id != c.SPA_PARAM_Latency) return;
-            const pod: *const c.spa_pod = param_pod orelse return;
             const port_data: *PortListenerData = @ptrCast(@alignCast(data));
-
-            const obj: *const c.spa_pod_object = @ptrCast(@alignCast(pod));
-
-            var min_rate: ?u32 = null;
-            var max_rate: ?u32 = null;
-
-            var prop_iter = c.spa_pod_prop_first(&obj.body);
-            while (c.spa_pod_prop_is_inside(&obj.body, obj.pod.size, prop_iter)) {
-                switch (prop_iter.*.key) {
-                    c.SPA_PARAM_LATENCY_minRate => {
-                        const val: *const c.spa_pod_int = @ptrCast(@alignCast(&prop_iter.*.value));
-                        min_rate = @intCast(val.value);
-                    },
-                    c.SPA_PARAM_LATENCY_maxRate => {
-                        const val: *const c.spa_pod_int = @ptrCast(@alignCast(&prop_iter.*.value));
-                        max_rate = @intCast(val.value);
-                    },
-                    else => {},
-                }
-                prop_iter = @ptrCast(@alignCast(c.spa_pod_prop_next(prop_iter)));
-            }
-
-            if (min_rate != null and max_rate != null) {
-                const latency = types.PipewireLatency{
-                    .min = min_rate.?,
-                    .max = max_rate.?,
-                };
-
-                if (port_data.handle.nodes.getPtr(port_data.node_id)) |node| {
-                    if (port_data.is_inp) {
-                        node.upstream = latency;
-                    } else {
-                        node.downstream = latency;
-                    }
-                }
-            }
+            const node = port_data.handle.nodes.getPtr(port_data.node_id) orelse return;
+            const port = (if (port_data.is_inp) node.inps.getPtr(port_data.port_id) else node.outs.getPtr(port_data.port_id)) orelse return;
+            const pod: *const c.spa_pod = param_pod orelse {
+                port.setLatency(true, null);
+                port.setLatency(false, null);
+                port_data.handle.latency_labels_dirty = true;
+                return;
+            };
+            var info: c.spa_latency_info = undefined;
+            if (pijpkijk_latency_parse(pod, &info) < 0) return;
+            const range = latency.Range{
+                .min = .{ .quantum = info.min_quantum, .frames = info.min_rate, .ns = info.min_ns },
+                .max = .{ .quantum = info.max_quantum, .frames = info.max_rate, .ns = info.max_ns },
+            };
+            // The latency object's direction, not the physical port direction,
+            // determines whether it describes upstream or downstream delay.
+            const target = if (info.direction == c.SPA_DIRECTION_OUTPUT) &port.upstream else &port.downstream;
+            if (std.meta.eql(target.*, @as(?latency.Range, range))) return;
+            port.setLatency(info.direction == c.SPA_DIRECTION_OUTPUT, range);
+            port_data.handle.latency_labels_dirty = true;
+            std.log.debug("Latency node={} port={} {s}: {f}", .{
+                port_data.node_id,                                          port_data.port_id,
+                if (info.direction == c.SPA_DIRECTION_OUTPUT) "U" else "D", range,
+            });
         }
 
         const events = c.pw_port_events{
             .version = c.PW_VERSION_PORT_EVENTS,
-            .info = null,
+            .info = PipewireHandle.PortEvents.onInfo,
             .param = PipewireHandle.PortEvents.onParam,
+        };
+    };
+
+    const NodeEvents = struct {
+        fn onInfo(data: ?*anyopaque, info: [*c]const c.pw_node_info) callconv(.c) void {
+            if (info == null or info.*.change_mask & c.PW_NODE_CHANGE_MASK_STATE == 0) return;
+            const listener: *NodeListenerData = @ptrCast(@alignCast(data));
+            const node = listener.handle.nodes.getPtr(listener.node_id) orelse return;
+            node.running = info.*.state == c.PW_NODE_STATE_RUNNING;
+            if (!node.running and node.clock != null) {
+                node.clock = null;
+                listener.handle.latency_labels_dirty = true;
+            }
+        }
+
+        const events = c.pw_node_events{
+            .version = c.PW_VERSION_NODE_EVENTS,
+            .info = onInfo,
+            .param = null,
         };
     };
 
@@ -428,6 +484,20 @@ pub const PipewireHandle = struct {
                         .y = null,
                     });
 
+                    bind_node: {
+                        const proxy: *c.pw_node = @ptrCast(c.pw_registry_bind(self.registry, id, type_str, c.PW_VERSION_NODE, 0) orelse break :bind_node);
+                        const node_data = self.allocator.create(NodeListenerData) catch {
+                            c.pw_proxy_destroy(@ptrCast(proxy));
+                            break :bind_node;
+                        };
+                        node_data.* = .{ .handle = self, .node_id = id, .proxy = proxy };
+                        self.node_listeners.append(self.allocator, node_data) catch {
+                            node_data.deinit();
+                            break :bind_node;
+                        };
+                        _ = c.pw_node_add_listener(proxy, &node_data.listener, &NodeEvents.events, node_data);
+                    }
+
                     self.nodes_dirty = true;
                 },
                 .PORT => {
@@ -505,11 +575,14 @@ pub const PipewireHandle = struct {
 
                     // Bind port to subscribe to latency params
                     bind_port: {
-                        const proxy: ?*c.pw_port = @ptrCast(c.pw_registry_bind(self.registry, id, type_str, c.PW_VERSION_PORT, 0) orelse break :bind_port);
-                        const port_data = self.allocator.create(PortListenerData) catch break :bind_port;
-                        port_data.* = .{ .handle = self, .node_id = node_id_found, .is_inp = is_inp_found };
+                        const proxy: *c.pw_port = @ptrCast(c.pw_registry_bind(self.registry, id, type_str, c.PW_VERSION_PORT, 0) orelse break :bind_port);
+                        const port_data = self.allocator.create(PortListenerData) catch {
+                            c.pw_proxy_destroy(@ptrCast(proxy));
+                            break :bind_port;
+                        };
+                        port_data.* = .{ .handle = self, .node_id = node_id_found, .port_id = id, .is_inp = is_inp_found, .proxy = proxy };
                         self.port_listeners.append(self.allocator, port_data) catch {
-                            self.allocator.destroy(port_data);
+                            port_data.deinit();
                             break :bind_port;
                         };
 
@@ -531,6 +604,27 @@ pub const PipewireHandle = struct {
 
         fn onGlobalRemove(data: ?*anyopaque, id: u32) callconv(.c) void {
             var self: *PipewireHandle = @ptrCast(@alignCast(data));
+
+            var listener_index: usize = 0;
+            while (listener_index < self.port_listeners.items.len) {
+                const listener = self.port_listeners.items[listener_index];
+                if (listener.port_id == id or listener.node_id == id) {
+                    _ = self.port_listeners.swapRemove(listener_index);
+                    listener.deinit();
+                } else {
+                    listener_index += 1;
+                }
+            }
+            listener_index = 0;
+            while (listener_index < self.node_listeners.items.len) {
+                const listener = self.node_listeners.items[listener_index];
+                if (listener.node_id == id) {
+                    _ = self.node_listeners.swapRemove(listener_index);
+                    listener.deinit();
+                } else {
+                    listener_index += 1;
+                }
+            }
 
             if (self.nodes.getPtr(id)) |*value| {
                 (value.*).deinit(self.allocator);
@@ -666,6 +760,7 @@ pub const PipewireHandle = struct {
 
         var x_current: f32 = 0;
         var y_current: f32 = 0;
+        var column_width: f32 = 0;
 
         // First pass: place unconnected nodes that have NO input ports in the first column.
         // Unconnected nodes WITH input ports are deferred to the last column.
@@ -699,6 +794,7 @@ pub const PipewireHandle = struct {
 
                     node.value_ptr.x = x_current;
                     node.value_ptr.y = y_current;
+                    column_width = @max(column_width, node.value_ptr.width);
 
                     // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
                     // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
@@ -716,7 +812,8 @@ pub const PipewireHandle = struct {
             // Keep going until all nodes placed OR we find a cyclical dependency. In that case we just return
             while (completed.count() != self.nodes.count()) {
                 // Next column...
-                x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
+                x_current += column_width + types.W_NODE_SPACING;
+                column_width = 0;
                 y_current = 0;
 
                 // In order to properly place our nodes, we keep track of some metadata
@@ -805,6 +902,7 @@ pub const PipewireHandle = struct {
                     const ideal_y = item.center_of_mass - node_height / 2;
                     node.x = x_current;
                     node.y = @max(ideal_y, min_y);
+                    column_width = @max(column_width, node.width);
 
                     // We draw the nodes in inverse order. This is currently to do with the fact we do stupid
                     // anti-aliaising. Essentially, the draw order matters, we must draw bottom to top... so we
@@ -816,10 +914,9 @@ pub const PipewireHandle = struct {
                 }
 
                 // If no nodes were placed this pass, there is a cyclical dependency (feedback loop)
-                // Place all remaining nodes in the next column and break.
+                // Place all remaining nodes in the current empty column and break.
                 if (completed.count() == completed_start_size) {
                     std.log.warn("Detected cyclical dependencies in PipeWire graph, placing remaining nodes", .{});
-                    x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
                     y_current = 0;
 
                     var remaining_it = self.nodes.iterator();
@@ -827,6 +924,7 @@ pub const PipewireHandle = struct {
                         if (completed.contains(remaining.value_ptr.node_id)) continue;
                         remaining.value_ptr.x = x_current;
                         remaining.value_ptr.y = y_current;
+                        column_width = @max(column_width, remaining.value_ptr.width);
                         remaining.value_ptr.z = @floatFromInt(99999 - remaining.value_ptr.node_id);
                         y_current += remaining.value_ptr.computeNodeHeight() + types.H_NODE_SPACING;
                         try completed.put(self.allocator, remaining.value_ptr.node_id, {});
@@ -838,7 +936,7 @@ pub const PipewireHandle = struct {
 
         // Last column: place unconnected sink nodes (have input ports but no connections)
         if (deferred_sink_nodes.items.len > 0) {
-            x_current += types.PipewireNode.W_NODE + types.W_NODE_SPACING;
+            x_current += column_width + types.W_NODE_SPACING;
             y_current = 0;
 
             for (deferred_sink_nodes.items) |node_id| {
@@ -918,10 +1016,34 @@ pub const PipewireHandle = struct {
     }
 
     /// Drain all events from the registry
-    pub fn drain(self: *PipewireHandle, auto_layout: bool) !void {
+    pub fn drain(self: *PipewireHandle, auto_layout: bool, atlas: types.FontAtlas) !void {
         try handleError(
             c.pw_loop_iterate(self.loop, 0),
         );
+
+        if (self.latency_labels_dirty or self.nodes_dirty) {
+            const advance = atlas.getGlyph('0').?.advance * types.PipewireNode.PORT_FONT_SIZE / atlas.parsed.value.metrics.emSize;
+            for (self.nodes.values()) |*node| {
+                var widths = [2]f32{ 0, 0 };
+                inline for (.{ node.inps, node.outs }) |ports| {
+                    for (ports.values()) |*port| {
+                        port.updateLatencyText(node.clock);
+                        inline for (0..2) |index| {
+                            widths[index] = @max(widths[index], @as(f32, @floatFromInt(port.latencyText(index).len)) * advance);
+                        }
+                    }
+                }
+                const row_width = widths[0] + widths[1] + 2.0 * types.PipewireNode.PORT_COLUMN_GAP +
+                    types.PipewireNode.PORT_NAME_WIDTH + 2.0 * (types.PipewireNode.W_PIN + 8.0);
+                const has_inputs = node.inps.count() != 0;
+                const has_outputs = node.outs.count() != 0;
+                const node_width = @max(types.PipewireNode.W_NODE, if (has_inputs and has_outputs) 2.0 * row_width else if (has_inputs or has_outputs) row_width else 0);
+                if (node.width != node_width) self.nodes_dirty = true;
+                node.width = node_width;
+                node.latency_widths = widths;
+            }
+            self.latency_labels_dirty = false;
+        }
 
         if (self.nodes_dirty) {
             if (auto_layout) {
@@ -943,10 +1065,94 @@ pub const PipewireHandle = struct {
         }
 
         for (self.port_listeners.items) |port_data| {
-            self.allocator.destroy(port_data);
+            port_data.deinit();
         }
         self.port_listeners.deinit(self.allocator);
+        for (self.node_listeners.items) |node_data| node_data.deinit();
+        self.node_listeners.deinit(self.allocator);
 
         self.nodes.deinit(self.allocator);
     }
 };
+
+test "port latency preserves every component and both directions independently" {
+    const allocator = std.testing.allocator;
+    var handle = PipewireHandle{ .allocator = allocator };
+    defer handle.deinit();
+    try handle.nodes.put(allocator, 1, .{
+        .node_id = 1,
+        .name = try allocator.dupe(u8, "node"),
+        .mean_runtime_ns = null,
+    });
+    const node = handle.nodes.getPtr(1).?;
+    try node.inps.put(allocator, 2, .{ .name = try allocator.dupe(u8, "first") });
+    try node.inps.put(allocator, 3, .{ .name = try allocator.dupe(u8, "second") });
+    var listener = PortListenerData{ .handle = &handle, .node_id = 1, .port_id = 2, .is_inp = true };
+
+    // A real SPA Object pod: header followed by seven aligned properties.
+    var words align(8) = [_]u32{
+        176,                            c.SPA_TYPE_Object, c.SPA_TYPE_OBJECT_ParamLatency, c.SPA_PARAM_Latency,
+        c.SPA_PARAM_LATENCY_direction,  0,                 4,                              c.SPA_TYPE_Id,
+        c.SPA_DIRECTION_OUTPUT,         0,                 c.SPA_PARAM_LATENCY_minQuantum, 0,
+        4,                              c.SPA_TYPE_Float,  @bitCast(@as(f32, 0.25)),       0,
+        c.SPA_PARAM_LATENCY_maxQuantum, 0,                 4,                              c.SPA_TYPE_Float,
+        @bitCast(@as(f32, 1.5)),        0,                 c.SPA_PARAM_LATENCY_minRate,    0,
+        4,                              c.SPA_TYPE_Int,    17,                             0,
+        c.SPA_PARAM_LATENCY_maxRate,    0,                 4,                              c.SPA_TYPE_Int,
+        113,                            0,                 c.SPA_PARAM_LATENCY_minNs,      0,
+        8,                              c.SPA_TYPE_Long,   1000,                           0,
+        c.SPA_PARAM_LATENCY_maxNs,      0,                 8,                              c.SPA_TYPE_Long,
+        2000,                           0,
+    };
+    const pod: *const c.spa_pod = @ptrCast(&words);
+    PipewireHandle.PortEvents.onParam(&listener, 0, c.SPA_PARAM_Latency, 0, 0, pod);
+    const expected = latency.Range{
+        .min = .{ .quantum = 0.25, .frames = 17, .ns = 1000 },
+        .max = .{ .quantum = 1.5, .frames = 113, .ns = 2000 },
+    };
+    try std.testing.expectEqualDeep(expected, node.inps.get(2).?.upstream.?);
+    try std.testing.expect(node.inps.get(2).?.downstream == null);
+
+    words[8] = c.SPA_DIRECTION_INPUT;
+    words[26] = 51;
+    PipewireHandle.PortEvents.onParam(&listener, 0, c.SPA_PARAM_Latency, 0, 0, pod);
+    try std.testing.expectEqualDeep(expected, node.inps.get(2).?.upstream.?);
+    try std.testing.expectEqual(@as(i64, 51), node.inps.get(2).?.downstream.?.min.frames);
+
+    listener.port_id = 3;
+    PipewireHandle.PortEvents.onParam(&listener, 0, c.SPA_PARAM_Latency, 0, 0, pod);
+    try std.testing.expect(node.inps.get(3).?.upstream == null);
+    try std.testing.expectEqualDeep(expected, node.inps.get(2).?.upstream.?);
+    PipewireHandle.PortEvents.onParam(&listener, 0, c.SPA_PARAM_Latency, 0, 0, null);
+    try std.testing.expect(node.inps.get(3).?.downstream == null);
+    try std.testing.expect(node.inps.get(2).?.downstream != null);
+
+    listener.port_id = 2;
+    words[1] = c.SPA_TYPE_Int; // A non-object must not be reinterpreted as properties.
+    PipewireHandle.PortEvents.onParam(&listener, 0, c.SPA_PARAM_Latency, 0, 0, pod);
+    try std.testing.expectEqualDeep(expected, node.inps.get(2).?.upstream.?);
+}
+
+test "stopping a node invalidates the clock until fresh profiler data arrives" {
+    const allocator = std.testing.allocator;
+    var handle = PipewireHandle{ .allocator = allocator };
+    defer handle.deinit();
+    try handle.nodes.put(allocator, 1, .{
+        .node_id = 1,
+        .name = try allocator.dupe(u8, "node"),
+        .mean_runtime_ns = null,
+        .running = true,
+        .clock = .{ .rate_num = 1, .rate_denom = 48000, .quantum = 192 },
+    });
+    var listener = NodeListenerData{ .handle = &handle, .node_id = 1 };
+    var info = std.mem.zeroes(c.pw_node_info);
+    info.change_mask = c.PW_NODE_CHANGE_MASK_STATE;
+    info.state = c.PW_NODE_STATE_IDLE;
+    PipewireHandle.NodeEvents.onInfo(&listener, &info);
+    try std.testing.expect(handle.nodes.get(1).?.clock == null);
+    try std.testing.expect(!handle.nodes.get(1).?.running);
+    info.state = c.PW_NODE_STATE_RUNNING;
+    PipewireHandle.NodeEvents.onInfo(&listener, &info);
+    try std.testing.expect(handle.nodes.get(1).?.running);
+    try std.testing.expect(handle.nodes.get(1).?.clock == null);
+}

@@ -8,6 +8,14 @@ pub const sdl = @import("sdl.zig");
 const pipewire = @import("pipewire.zig");
 const types = @import("types.zig");
 
+// Make the latency regression tests discoverable without instantiating the GUI.
+comptime {
+    if (@import("builtin").is_test) {
+        _ = pipewire;
+        _ = @import("latency.zig");
+    }
+}
+
 pub const FRAMES_IN_FLIGHT = 3;
 
 pub const UserData = enum(u64) {
@@ -595,7 +603,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
 
                                 // Check if poll input...
                                 if ((revents & std.posix.POLL.IN) != 0) {
-                                    try self.pipewire_handle.drain(self.auto_layout);
+                                    try self.pipewire_handle.drain(self.auto_layout, self.font_atlas);
 
                                     needs_state_update = true;
                                     needs_render = true;
@@ -785,7 +793,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                         const n = entry.value_ptr;
                                         if (n.x) |nx| {
                                             if (n.y) |ny| {
-                                                const w = types.PipewireNode.W_NODE;
+                                                const w = n.width;
                                                 const h = n.computeNodeHeight();
                                                 if (world_x >= nx and world_x <= nx + w and
                                                     world_y >= ny and world_y <= ny + h)
@@ -958,7 +966,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                                     const mouse_y = self.window_handle.state.input.mouse_y orelse 0.0;
                                                     const world_x = (mouse_x / self.scale) + self.camera_pos[0];
                                                     const world_y = (mouse_y / self.scale) + self.camera_pos[1];
-                                                    node.x = world_x - types.PipewireNode.W_NODE / 2.0;
+                                                    node.x = world_x - node.width / 2.0;
                                                     node.y = world_y - node.computeNodeHeight() / 2.0;
                                                 }
                                             }
@@ -1035,7 +1043,7 @@ pub fn AppImpl(comptime BackendHandle: type) type {
                                         if (node.y) |ny| {
                                             const sw: f32 = @floatFromInt(self.window_handle.state.width);
                                             const sh: f32 = @floatFromInt(self.window_handle.state.height);
-                                            const node_cx = nx + types.PipewireNode.W_NODE / 2.0;
+                                            const node_cx = nx + node.width / 2.0;
                                             const node_cy = ny + node.computeNodeHeight() / 2.0;
                                             self.camera_pos[0] = node_cx - (sw / 2.0) / self.scale;
                                             self.camera_pos[1] = node_cy - (sh / 2.0) / self.scale;

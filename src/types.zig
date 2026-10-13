@@ -1,5 +1,6 @@
 const c = @import("c.zig").c;
 const std = @import("std");
+const latency = @import("latency.zig");
 
 // =Colors=============================================================================================================
 
@@ -579,12 +580,106 @@ pub const PipewireLink = struct {
 pub const PipewirePort = struct {
     name: []const u8,
     connections: std.AutoArrayHashMapUnmanaged(u32, PipewireLink) = .empty,
+    upstream: ?latency.Range = null,
+    downstream: ?latency.Range = null,
+    latency_labels: [2][256]u8 = undefined,
+    latency_label_lengths: [2]u16 = .{ 0, 0 },
 
     pub fn deinit(self: *PipewirePort, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         self.connections.deinit(allocator);
     }
+
+    pub fn setLatency(self: *PipewirePort, upstream: bool, range: ?latency.Range) void {
+        if (upstream) self.upstream = range else self.downstream = range;
+    }
+
+    pub fn updateLatencyText(self: *PipewirePort, clock: ?latency.Clock) void {
+        inline for (.{ self.upstream, self.downstream }, 0..) |range, index| {
+            self.latency_label_lengths[index] = 0;
+            if (range) |value| {
+                var writer: std.Io.Writer = .fixed(&self.latency_labels[index]);
+                const prefix = if (index == 0) "u" else "d";
+                const min = value.min.samples(clock);
+                const max = value.max.samples(clock);
+                if (min != null and max != null) {
+                    writer.print("{s}[{d}:{d}]", .{ prefix, min.?, max.? }) catch unreachable;
+                } else {
+                    writer.print("{s}[-]", .{prefix}) catch unreachable;
+                }
+                if (value.min.quantum != 0 or value.max.quantum != 0) {
+                    if (value.min.quantum == value.max.quantum) {
+                        writer.print("({d}q)", .{value.min.quantum}) catch unreachable;
+                    } else {
+                        writer.print("({d}:{d}q)", .{ value.min.quantum, value.max.quantum }) catch unreachable;
+                    }
+                }
+                self.latency_label_lengths[index] = @intCast(writer.buffered().len);
+            }
+        }
+    }
+
+    pub fn latencyText(self: *const PipewirePort, comptime index: usize) []const u8 {
+        const len = self.latency_label_lengths[index];
+        return if (len == 0) (if (index == 0) "u[-]" else "d[-]") else self.latency_labels[index][0..len];
+    }
+
+    fn appendLabel(
+        self: *const PipewirePort,
+        allocator: std.mem.Allocator,
+        atlas: FontAtlas,
+        list: *std.ArrayListUnmanaged(TextVertex),
+        x: f32,
+        y: f32,
+        z: f32,
+        max_w: f32,
+        latency_widths: [2]f32,
+        comptime mirrored: bool,
+    ) !void {
+        const name_width = max_w - latency_widths[0] - latency_widths[1] -
+            2.0 * PipewireNode.PORT_COLUMN_GAP;
+        const name_x = if (mirrored) x else x + max_w;
+        try TextVertex.append(allocator, atlas, self.name, if (mirrored) .Left else .Right, name_x, y, z, name_width, PipewireNode.PORT_FONT_SIZE, list, .{ 1, 1, 1, 0.85 });
+        var column_x = if (mirrored) x + name_width + PipewireNode.PORT_COLUMN_GAP else x;
+        inline for (if (mirrored) .{ 1, 0 } else .{ 0, 1 }) |index| {
+            try TextVertex.append(allocator, atlas, self.latencyText(index), if (mirrored) .Left else .Right, column_x + if (mirrored) 0 else latency_widths[index], y, z, latency_widths[index], PipewireNode.PORT_FONT_SIZE, list, PipewireNode.SECONDARY_TEXT_COLOR);
+            column_x += latency_widths[index] + PipewireNode.PORT_COLUMN_GAP;
+        }
+    }
 };
+
+test "port bounds refresh when timing or reported latency changes" {
+    var port = PipewirePort{ .name = "audio" };
+    port.setLatency(true, .{
+        .min = .{ .quantum = 1, .frames = 24, .ns = 1_000_000 },
+        .max = .{ .quantum = 2, .frames = 24, .ns = 1_000_000 },
+    });
+    port.setLatency(false, .{
+        .min = .{ .ns = 1_000_000 },
+        .max = .{ .ns = 2_000_000 },
+    });
+    port.updateLatencyText(.{ .rate_num = 1, .rate_denom = 48000, .quantum = 192 });
+    try std.testing.expectEqualStrings("u[264:456](1:2q)", port.latencyText(0));
+    port.updateLatencyText(.{ .rate_num = 1, .rate_denom = 96000, .quantum = 192 });
+    try std.testing.expectEqualStrings("u[312:504](1:2q)", port.latencyText(0));
+    port.updateLatencyText(null);
+    try std.testing.expectEqualStrings("u[-](1:2q)", port.latencyText(0));
+    try std.testing.expectEqualStrings("d[-]", port.latencyText(1));
+    port.setLatency(false, .{ .min = .{ .frames = 24 }, .max = .{ .frames = 48 } });
+    port.updateLatencyText(null);
+    try std.testing.expectEqualStrings("d[24:48]", port.latencyText(1));
+    port.setLatency(false, .{ .min = .{ .ns = 31_250 }, .max = .{ .ns = 62_500 } });
+    port.updateLatencyText(.{ .rate_num = 1, .rate_denom = 48000, .quantum = 192 });
+    try std.testing.expectEqualStrings("d[1.5:3]", port.latencyText(1));
+    port.setLatency(false, .{ .min = .{ .quantum = 1 }, .max = .{ .quantum = 1 } });
+    port.updateLatencyText(null);
+    try std.testing.expectEqualStrings("d[-](1q)", port.latencyText(1));
+    port.updateLatencyText(.{ .rate_num = 1, .rate_denom = 48000, .quantum = 192 });
+    try std.testing.expectEqualStrings("d[192:192](1q)", port.latencyText(1));
+    port.setLatency(false, null);
+    port.updateLatencyText(null);
+    try std.testing.expectEqualStrings("d[-]", port.latencyText(1));
+}
 
 /// Height spacing between nodes
 pub const H_NODE_SPACING: f32 = 100.0;
@@ -592,20 +687,16 @@ pub const H_NODE_SPACING: f32 = 100.0;
 /// Width spacing between nodes
 pub const W_NODE_SPACING: f32 = 300.0;
 
-/// Pipewire latency in samples
-pub const PipewireLatency = struct {
-    min: u32,
-    max: u32,
-};
-
 pub const PipewireNode = struct {
     name: []const u8,
     node_id: u32,
     mean_runtime_ns: ?f32,
-    upstream: ?PipewireLatency = null,
-    downstream: ?PipewireLatency = null,
     inps: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
     outs: std.AutoArrayHashMapUnmanaged(u32, PipewirePort) = .empty,
+    width: f32 = W_NODE,
+    latency_widths: [2]f32 = .{ 200, 200 },
+    clock: ?latency.Clock = null,
+    running: bool = false,
 
     // for drawing, honestly probably shouldnt live here but I'll allow it
     x: ?f32 = null,
@@ -639,8 +730,12 @@ pub const PipewireNode = struct {
         return color;
     }
 
-    /// Fixed width of the node
+    /// Minimum width for nodes without ports; port rows determine wider nodes.
     pub const W_NODE: f32 = 400.0;
+    pub const PORT_FONT_SIZE: f32 = 20.0;
+    pub const PORT_COLUMN_GAP: f32 = 8.0;
+    pub const PORT_NAME_WIDTH: f32 = 160.0;
+    const SECONDARY_TEXT_COLOR = [4]f32{ 0.55, 0.55, 0.55, 1.0 };
 
     /// Height reserved for the the title of the node
     pub const H_OFFSET_TITLE: f32 = 76.0;
@@ -688,7 +783,7 @@ pub const PipewireNode = struct {
 
     /// Grab the x-coordinate of the given output pin
     pub fn getOutPortX(self: PipewireNode, _: usize) f32 {
-        return self.x.? + W_NODE;
+        return self.x.? + self.width;
     }
 
     /// Grab the y-coordinate of the given input pin
@@ -717,12 +812,12 @@ pub const PipewireNode = struct {
         const base = self.port_color.?;
         const border_color: [4]f32 = .{ base[0] * 0.5, base[1] * 0.5, base[2] * 0.5, base[3] };
         const border_radii: [4]f32 = .{ 12.0, 12.0, 12.0, 12.0 };
-        try QuadVertex.append(allocator, list, self.x.? - 2, self.y.? - 2, self.z.? + 0.4, W_NODE + 4, H_NODE + 4, border_color, border_radii);
+        try QuadVertex.append(allocator, list, self.x.? - 2, self.y.? - 2, self.z.? + 0.4, self.width + 4, H_NODE + 4, border_color, border_radii);
 
         // Fill quad
         const color = self.runtimeFillColor(runtime_min_ns, runtime_max_ns);
         const radii: [4]f32 = .{ 10.0, 10.0, 10.0, 10.0 };
-        try QuadVertex.append(allocator, list, self.x.?, self.y.?, self.z.? + 0.3, W_NODE, H_NODE, color, radii);
+        try QuadVertex.append(allocator, list, self.x.?, self.y.?, self.z.? + 0.3, self.width, H_NODE, color, radii);
     }
 
     /// Appends the QuadVertexs required to draw the pins of the current node to an existing list of vertives
@@ -746,7 +841,7 @@ pub const PipewireNode = struct {
         // RHS of the node
         {
             const H_BEG: f32 = H_OFFSET_TITLE;
-            const W_BEG: f32 = W_NODE - W_OFFSET_INNER_PIN * 2 - W_PIN;
+            const W_BEG: f32 = self.width - W_OFFSET_INNER_PIN * 2 - W_PIN;
             const radii = .{ 0.0, 0.0, 2.5, 2.5 };
             for (0..self.outs.count()) |i| {
                 const px = self.x.? + W_BEG + @as(f32, @floatFromInt(i)) * W_OFFSET_OUTER_PIN + W_OFFSET_INNER_PIN;
@@ -949,7 +1044,7 @@ pub const PipewireNode = struct {
         }
 
         // Test output ports (right side)
-        const w_beg = W_NODE - W_PIN;
+        const w_beg = self.width - W_PIN;
         for (0..self.outs.count()) |i| {
             const px = node_x + w_beg;
             const py = node_y + H_OFFSET_TITLE + @as(f32, @floatFromInt(i)) * H_OFFSET_OUTER_PIN + H_OFFSET_INNER_PIN;
@@ -989,7 +1084,7 @@ pub const PipewireNode = struct {
         p3: [2]f32,
     } {
         const p0 = [2]f32{
-            self.x.? + W_NODE,
+            self.x.? + self.width,
             self.y.? + H_OFFSET_TITLE + (@as(f32, @floatFromInt(self_node_index)) * H_OFFSET_OUTER_PIN) + //
                 H_OFFSET_INNER_PIN + (H_PIN / 2.0),
         };
@@ -1070,8 +1165,8 @@ pub const PipewireNode = struct {
         atlas: FontAtlas,
         list: *std.ArrayListUnmanaged(TextVertex),
     ) !void {
-        const title_max_w = W_NODE - 20.0;
-        const title_x = self.x.? + (W_NODE / 2.0);
+        const title_max_w = self.width - 20.0;
+        const title_x = self.x.? + (self.width / 2.0);
         const title_y = self.y.? + 30.0;
 
         // Title: port-colored tint (lerp white toward port color)
@@ -1112,95 +1207,17 @@ pub const PipewireNode = struct {
                 title_max_w,
                 12.0,
                 list,
-                null,
+                SECONDARY_TEXT_COLOR,
             );
         }
 
-        // Upstream latency (above inputs)
-        if (self.upstream) |lat| {
-            var buf: [32]u8 = undefined;
-            const lat_text = try std.fmt.bufPrint(&buf, "{}/{}", .{ lat.min, lat.max });
-            try TextVertex.append(
-                allocator,
-                atlas,
-                lat_text,
-                .Left,
-                self.x.? + W_PIN + 8.0,
-                self.y.? + H_OFFSET_TITLE - 14.0,
-                self.z.? + 0.2,
-                W_NODE / 2.0 - 20.0,
-                10.0,
-                list,
-                null,
-            );
-        }
-
-        // Downstream latency (above outputs)
-        if (self.downstream) |lat| {
-            var buf: [32]u8 = undefined;
-            const lat_text = try std.fmt.bufPrint(&buf, "{}/{}", .{ lat.min, lat.max });
-            try TextVertex.append(
-                allocator,
-                atlas,
-                lat_text,
-                .Right,
-                self.x.? + W_NODE - W_PIN - 8.0,
-                self.y.? + H_OFFSET_TITLE - 14.0,
-                self.z.? + 0.2,
-                W_NODE / 2.0 - 20.0,
-                10.0,
-                list,
-                null,
-            );
-        }
-
-        const port_label_color = [4]f32{ 1.0, 1.0, 1.0, 0.7 };
-
-        {
-            var i: usize = 0;
-            var port_it = self.inps.iterator();
-            while (port_it.next()) |port| : (i += 1) {
-                const port_x = self.x.? + W_OFFSET_INNER_PIN + W_PIN + 8.0;
-                const port_y = self.getInpPortY(i) + 4.0;
-                const port_max_w = (W_NODE / 2.0) - W_PIN - 12.0;
-
-                try TextVertex.append(
-                    allocator,
-                    atlas,
-                    port.value_ptr.name,
-                    .Left,
-                    port_x,
-                    port_y,
-                    self.z.?,
-                    port_max_w,
-                    12.0,
-                    list,
-                    port_label_color,
-                );
-            }
-        }
-
-        {
-            var i: usize = 0;
-            var port_it = self.outs.iterator();
-            while (port_it.next()) |port| : (i += 1) {
-                const port_x = self.x.? + W_NODE - W_OFFSET_INNER_PIN - W_PIN - 8.0;
-                const port_y = self.getInpPortY(i) + 4.0;
-                const port_max_w = (W_NODE / 2.0) - W_PIN - 12.0;
-
-                try TextVertex.append(
-                    allocator,
-                    atlas,
-                    port.value_ptr.name,
-                    .Right,
-                    port_x,
-                    port_y,
-                    self.z.?,
-                    port_max_w,
-                    12.0,
-                    list,
-                    port_label_color,
-                );
+        const split_rows = self.inps.count() != 0 and self.outs.count() != 0;
+        const side_width = if (split_rows) self.width / 2.0 else self.width;
+        const row_width = side_width - 2.0 * (W_PIN + 8.0);
+        inline for (.{ self.inps, self.outs }, 0..) |ports, side| {
+            const row_x = self.x.? + (if (split_rows) @as(f32, @floatFromInt(side)) * side_width else 0) + W_PIN + 8.0;
+            for (ports.values(), 0..) |*port, i| {
+                try port.appendLabel(allocator, atlas, list, row_x, self.getInpPortY(i) + 5.0, self.z.?, row_width, self.latency_widths, side == 0);
             }
         }
     }

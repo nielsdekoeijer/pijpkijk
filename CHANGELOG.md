@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Fix latency reporting: parse all SPA quantum/frame/nanosecond components,
+  use the latency object's direction, and retain both directions per port.
+- Display inline `u[min:max]` / `d[min:max]` sample-count bounds with mirrored
+  left-hand rows, no heading row, measured per-node columns, and truncated names.
+- Render latency text and runtime captions in a uniform muted gray while
+  preserving port names and node-title colors; show `-` for missing values,
+  and annotate nonzero quantum components alongside the sample totals.
+- Compact one-sided nodes instead of reserving an empty half, and space graph
+  columns according to their actual node widths.
+- Convert all latency components to graph-rate samples using actual profiler
+  driver clocks, preserving fractional samples; show unknown when reports or
+  required live timing are unavailable.
+- Release port latency subscriptions on removal so reused IDs cannot inherit
+  stale values.
+- Refresh the Nix development environment for host GPU-driver compatibility
+  and request Vulkan 1.1 to match the existing SPIR-V 1.3 shaders.
+
 ## v0.8.0
 
 X11/XCB backend support and runtime backend detection.
