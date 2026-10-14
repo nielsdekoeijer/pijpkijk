@@ -11,6 +11,8 @@
   and annotate nonzero quantum components alongside the sample totals.
 - Compact one-sided nodes instead of reserving an empty half, and space graph
   columns according to their actual node widths.
+- Reserve room for 32-character port names, widening nodes and graph columns
+  accordingly.
 - Convert all latency components to graph-rate samples using actual profiler
   driver clocks, preserving fractional samples; show unknown when reports or
   required live timing are unavailable.

@@ -77,10 +77,11 @@ right. Both directions are available on input and output ports; different
 ports retain their own values.
 
 There is no heading row. Latency columns are measured and aligned within
-each node; long port names are ellipsized. Latency text and runtime captions
-share a muted gray; port names and node titles keep their original coloring. Nodes
-with ports on only one side do not reserve an empty half, and graph columns
-use their actual node widths.
+each node; port names have room for 32 characters, and longer names are
+ellipsized. Latency text and runtime captions share a muted gray; port names
+and node titles keep their original coloring. Nodes widen to fit the port
+rows, nodes with ports on only one side do not reserve an empty half, and
+graph columns use their actual node widths.
 
 Conversion adds every reported quantum, graph-rate frame, and nanosecond
 component using the node's actual driver clock from PipeWire's profiler.

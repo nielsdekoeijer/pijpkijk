@@ -734,7 +734,8 @@ pub const PipewireNode = struct {
     pub const W_NODE: f32 = 400.0;
     pub const PORT_FONT_SIZE: f32 = 20.0;
     pub const PORT_COLUMN_GAP: f32 = 8.0;
-    pub const PORT_NAME_WIDTH: f32 = 160.0;
+    /// Fits 32 Roboto Mono characters at PORT_FONT_SIZE, with a little spare room.
+    pub const PORT_NAME_WIDTH: f32 = 400.0;
     const SECONDARY_TEXT_COLOR = [4]f32{ 0.55, 0.55, 0.55, 1.0 };
 
     /// Height reserved for the the title of the node
